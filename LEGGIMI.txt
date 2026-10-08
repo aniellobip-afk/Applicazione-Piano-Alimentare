@@ -1,0 +1,23 @@
+PIANO PASTI – versione installabile
+
+I dati (ricette, piano, spunte) vengono salvati nel dispositivo (localStorage),
+quindi restano anche se chiudi l'app o riavvii il telefono.
+
+OPZIONE A – Installarla come app (senza APK, la più semplice)
+1. Metti la cartella online su un hosting statico gratuito (Netlify Drop, GitHub Pages, Cloudflare Pages).
+2. Apri l'indirizzo con Chrome su Android -> menu ⋮ -> "Installa app" / "Aggiungi a schermata Home".
+3. Parte a schermo intero, funziona offline e ha la sua icona.
+
+OPZIONE B – Generare un APK vero
+1. Dopo aver messo il sito online (passo A1), vai su https://www.pwabuilder.com
+2. Inserisci l'indirizzo, scegli "Package for stores" -> Android -> scarica il pacchetto.
+3. Nel pacchetto trovi l'APK (per installarlo direttamente) e l'AAB (per Google Play).
+
+OPZIONE C – APK in locale con Capacitor (serve Node, Android Studio e JDK)
+1. mkdir piano-pasti-app && cd piano-pasti-app && npm init -y
+2. npm i @capacitor/core @capacitor/cli @capacitor/android
+3. npx cap init "Piano pasti" it.tuonome.pianopasti --web-dir=www
+4. Crea la cartella www e copia dentro index.html, manifest.webmanifest, sw.js e icons/
+5. npx cap add android && npx cap sync
+6. npx cap open android -> in Android Studio: Build > Build APK(s)
+   (l'APK è in android/app/build/outputs/apk/debug/)
