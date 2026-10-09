@@ -173,6 +173,15 @@
   .export{margin-top:16px}
   .export summary{cursor:pointer;font-weight:600;padding:8px 0}
   .export textarea{width:100%;font:inherit;border:1.5px solid var(--line);border-radius:10px;padding:10px;min-height:180px;background:#fff;color:var(--ink);resize:vertical}
+  textarea:focus-visible{outline:3px solid var(--lemon);outline-offset:1px;border-color:var(--ink)}
+  .editor textarea{width:100%;font:inherit;color:var(--ink);background:#fff;border:1.5px solid var(--line);border-radius:10px;padding:10px;min-height:84px;resize:vertical}
+  .pick-top{display:flex;justify-content:space-between;align-items:baseline;gap:10px}
+  .pick-count{white-space:nowrap;font-size:13px;font-weight:600;color:var(--basil-dark);background:#E3EFE7;border-radius:999px;padding:1px 10px}
+  .picker-hint{color:var(--muted);font-size:13px;margin:8px 0 0}
+  .chip:disabled:not([aria-pressed="true"]){opacity:.4;border-style:dashed;cursor:not-allowed}
+  .rcard-desc{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;font-size:14px;margin:0 0 6px}
+  .rec-tools{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 12px}
+  .io-msg{color:var(--basil-dark);font-size:14px;font-weight:600;margin:0 0 10px}
   @media (max-width:380px){
     .row{grid-template-columns:1fr 60px 66px 32px}
   }
@@ -216,6 +225,7 @@
   </section>
 
   <datalist id="names"></datalist>
+  <input type="file" id="imp-file" hidden>
 </div>
 
 <script>
@@ -237,13 +247,15 @@ const MEALS=[
   ["cena","Cena","meal dinner","cena"]
 ];
 const TAGS=[["colazione","Colazione"],["spuntino","Spuntino"],["pranzo","Pranzo"],["cena","Cena"]];
-const UNITS={g:["m",1],kg:["m",1000],ml:["v",1],l:["v",1000],pz:["p",1]};
+const UNITS={g:["m",1],pz:["p",1]};
+const LEGACY_UNITS={kg:1000,l:1000,ml:1}; // solo per convertire i dati salvati con le vecchie unità
 const KEY="piano-pasti-v2", OLD_KEY="piano-pasti-v1";
 
 let state={recipes:[],plan:{},checked:{}};
 let current=DAYS[(new Date().getDay()+6)%7][0];
 let picker={meal:null,days:[],all:false};
 let editing=null, recFilter="tutte", returnTab=null, focusSel=null;
+let ioMsg="";
 
 const $=s=>document.querySelector(s);
 const esc=s=>String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
@@ -269,6 +281,29 @@ function usage(rid){
 }
 function dayCount(day){
   return MEALS.reduce((n,[m])=>n+slot(day,m).filter(e=>recipeById(e.recipeId)).length,0);
+}
+
+/* ---------- Normalizzazione dati ---------- */
+function fixIngredient(it){
+  it=(it&&typeof it==="object")?it:{};
+  it.id=it.id||uid();
+  it.name=String(it.name==null?"":it.name);
+  it.qty=String(it.qty==null?"":it.qty);
+  if(it.unit!=="g"&&it.unit!=="pz"){
+    const m=LEGACY_UNITS[it.unit]||1;
+    const n=parseQty(it.qty);
+    if(n&&m!==1)it.qty=String(Math.round(n*m*100)/100);
+    it.unit="g";
+  }
+  return it;
+}
+function fixRecipe(r){
+  r.id=r.id||uid();
+  r.name=String(r.name==null?"":r.name);
+  r.desc=String(r.desc==null?"":r.desc);
+  r.tags=Array.isArray(r.tags)?r.tags.filter(t=>TAGS.some(x=>x[0]===t)):[];
+  r.ingredients=(Array.isArray(r.ingredients)?r.ingredients:[]).map(fixIngredient);
+  return r;
 }
 
 /* ---------- Salvataggio ---------- */
@@ -311,17 +346,28 @@ function renderDays(){
 }
 function pickerHtml(mk,tag){
   const recs=state.recipes.filter(r=>picker.all||r.tags.includes(tag));
-  const chips=DAYS.map(([k,,short])=>`<button class="chip chip-day" data-day="${k}" aria-pressed="${picker.days.includes(k)}" ${k===current?"disabled":""}>${short}</button>`).join("");
-  let list;
+  const busy=k=>k!==current&&slot(k,mk).some(e=>recipeById(e.recipeId));
+  const anyBusy=DAYS.some(([k])=>busy(k));
+  const chips=DAYS.map(([k,,short])=>{
+    const b=busy(k);
+    return `<button class="chip chip-day" data-day="${k}" aria-pressed="${picker.days.includes(k)}" ${k===current||b?"disabled":""}${b?` title="Ha già una ricetta in questo pasto"`:""}>${short}</button>`;
+  }).join("");
+  let list,anyUsed=false;
   if(recs.length){
-    list=recs.map(r=>`<button class="pick" data-rid="${r.id}"><b>${esc(rname(r))}</b><span class="entry-sub">${esc(summary(r))}</span></button>`).join("");
+    list=recs.map(r=>{
+      const u=usage(r.id);if(u)anyUsed=true;
+      const times=u+" "+(u===1?"volta":"volte");
+      return `<button class="pick" data-rid="${r.id}"><span class="pick-top"><b>${esc(rname(r))}</b>${u?`<span class="pick-count" aria-label="Usata ${times} nella settimana">${times}</span>`:""}</span><span class="entry-sub">${esc(summary(r))}</span></button>`;
+    }).join("");
   }else{
     list=`<p class="empty">${state.recipes.length?`Nessuna ricetta con il tag «${tagLabel(tag)}».`:"Non hai ancora nessuna ricetta."}</p>`;
   }
   return `<div class="picker">
     <p class="picker-label">Aggiungi anche negli altri giorni (facoltativo)</p>
     <div class="chips">${chips}</div>
+    ${anyBusy?`<p class="picker-hint">I giorni disattivati hanno già una ricetta in questo pasto.</p>`:""}
     <div class="pick-list">${list}</div>
+    ${anyUsed?`<p class="picker-hint" style="margin:0 0 10px">Il numero a destra indica quante volte la ricetta è già nel piano della settimana.</p>`:""}
     <div class="picker-foot">
       ${state.recipes.length?`<button class="ghost toggle-all">${picker.all?`Solo «${tagLabel(tag)}»`:"Mostra tutte le ricette"}</button>`:""}
       <button class="ghost new-from-picker" data-tag="${tag}">Crea nuova ricetta</button>
@@ -402,7 +448,7 @@ $("#reset").addEventListener("click",e=>{
 
 /* ---------- Ricette ---------- */
 function newRecipe(tag,from){
-  const r={id:uid(),name:"",tags:tag?[tag]:[],ingredients:[]};
+  const r={id:uid(),name:"",desc:"",tags:tag?[tag]:[],ingredients:[]};
   state.recipes.push(r);editing=r.id;returnTab=from||null;
   focusSel="#r-name";show("rec");save();
 }
@@ -415,6 +461,8 @@ function renderRec(){
   let list=state.recipes.filter(x=>recFilter==="tutte"||x.tags.includes(recFilter));
   list=[...list].sort((a,b)=>rname(a).localeCompare(rname(b),"it"));
   let html=`<div class="rec-top"><h2>Le tue ricette</h2><button class="primary" id="new-rec">Nuova ricetta</button></div>
+    <div class="rec-tools"><button class="ghost" id="exp-rec">Esporta ricette</button><button class="ghost" id="imp-rec">Importa ricette</button></div>
+    ${ioMsg?`<p class="io-msg" role="status">${esc(ioMsg)}</p>`:""}
     <div class="chips">${filters.map(([k,l])=>`<button class="chip chip-filter" data-f="${k}" aria-pressed="${recFilter===k}">${l}</button>`).join("")}</div>`;
   if(!list.length){
     html+=`<p class="state">${state.recipes.length?"Nessuna ricetta con questo tag.":"Non hai ancora ricette. Creane una e potrai assegnarla ai pasti di uno o più giorni."}</p>`;
@@ -422,7 +470,7 @@ function renderRec(){
   for(const x of list){
     const u=usage(x.id);
     html+=`<button class="rcard" data-rid="${x.id}">
-      <span class="rcard-name">${esc(rname(x))}</span>
+      <span class="rcard-name">${esc(rname(x))}</span>${x.desc&&x.desc.trim()?`<span class="rcard-desc">${esc(x.desc.trim())}</span>`:""}
       <span>${x.tags.length?x.tags.map(t=>`<span class="tag">${tagLabel(t)}</span>`).join(""):`<span class="entry-sub">Nessun tag</span>`}</span>
       <span class="rcard-meta">${x.ingredients.filter(i=>i.name.trim()).length} ingredienti · ${u?`in piano ${u} ${u===1?"volta":"volte"}`:"non ancora in piano"}</span>
     </button>`;
@@ -434,6 +482,8 @@ function renderEditor(box,r){
   <div class="editor">
     <div class="block"><label class="lab" for="r-name">Nome della ricetta</label>
       <input id="r-name" type="text" value="${esc(r.name)}" placeholder="Es. Pasta al pomodoro" autocomplete="off"></div>
+    <div class="block"><label class="lab" for="r-desc">Descrizione (facoltativa)</label>
+      <textarea id="r-desc" rows="3" placeholder="Es. Cuocere la pasta 10 minuti e condire con il sugo.">${esc(r.desc||"")}</textarea></div>
     <div class="block"><span class="lab" style="display:block;font-weight:600;font-size:14px;margin-bottom:6px">Tag</span>
       <div class="chips">${TAGS.map(([k,l])=>`<button class="chip chip-tag" data-t="${k}" aria-pressed="${r.tags.includes(k)}">${l}</button>`).join("")}</div></div>
     <div class="block"><h3>Ingredienti</h3><div class="rows">`;
@@ -455,6 +505,8 @@ function renderEditor(box,r){
 const recView=$("#rec-view");
 recView.addEventListener("click",e=>{
   const t=e.target;
+  if(t.closest("#exp-rec"))return exportRecipes();
+  if(t.closest("#imp-rec"))return $("#imp-file").click();
   if(t.closest("#new-rec"))return newRecipe(recFilter!=="tutte"?recFilter:null,null);
   if(t.closest(".chip-filter")){recFilter=t.closest(".chip-filter").dataset.f;return renderRec();}
   if(t.closest(".rcard")){editing=t.closest(".rcard").dataset.rid;returnTab=null;return renderRec();}
@@ -491,12 +543,57 @@ recView.addEventListener("click",e=>{
 recView.addEventListener("input",e=>{
   const r=editing&&recipeById(editing);if(!r)return;
   if(e.target.id==="r-name"){r.name=e.target.value;save();return;}
+  if(e.target.id==="r-desc"){r.desc=e.target.value;save();return;}
   const row=e.target.closest(".row");if(!row)return;
   const it=r.ingredients.find(i=>i.id===row.dataset.id);if(!it)return;
   if(e.target.classList.contains("f-name"))it.name=e.target.value;
   else if(e.target.classList.contains("f-qty"))it.qty=e.target.value;
   else if(e.target.classList.contains("f-unit"))it.unit=e.target.value;
   refreshCounts();save();
+});
+
+/* ---------- Esporta / importa ricette ---------- */
+function setIoMsg(msg){
+  ioMsg=msg;
+  if(!$("#view-rec").hidden&&!editing)renderRec();
+  setTimeout(()=>{
+    if(ioMsg===msg){ioMsg="";if(!$("#view-rec").hidden&&!editing)renderRec();}
+  },7000);
+}
+function exportRecipes(){
+  const n=state.recipes.length;
+  if(!n)return setIoMsg("Non ci sono ricette da esportare.");
+  const data={app:"piano-pasti",version:3,exported:new Date().toISOString(),recipes:state.recipes};
+  const blob=new Blob([JSON.stringify(data,null,2)],{type:"application/json"});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement("a");
+  a.href=url;a.download="ricette-piano-pasti-"+new Date().toISOString().slice(0,10)+".json";
+  document.body.appendChild(a);a.click();a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url),4000);
+  setIoMsg((n===1?"Esportata 1 ricetta":"Esportate "+n+" ricette")+": cerca il file nella cartella Download.");
+}
+$("#imp-file").addEventListener("change",async e=>{
+  const f=e.target.files&&e.target.files[0];
+  e.target.value="";
+  if(!f)return;
+  try{
+    const data=JSON.parse(await f.text());
+    const raw=Array.isArray(data)?data:data.recipes;
+    if(!Array.isArray(raw))throw new Error("formato");
+    let added=0,updated=0;
+    for(const x of raw){
+      if(!x||typeof x!=="object")continue;
+      const r=fixRecipe(x);
+      if(!r.name.trim()&&!r.ingredients.some(i=>i.name.trim()))continue;
+      const i=state.recipes.findIndex(y=>y.id===r.id);
+      if(i>=0){state.recipes[i]=r;updated++;}else{state.recipes.push(r);added++;}
+    }
+    const n=added+updated;
+    save();refreshCounts();
+    setIoMsg(n?((n===1?"Importata 1 ricetta":"Importate "+n+" ricette")+" ("+added+" nuove, "+updated+" aggiornate)."):"Nessuna ricetta valida nel file.");
+  }catch(err){
+    setIoMsg("Il file non è valido: scegli un file esportato da questa app.");
+  }
 });
 
 /* ---------- Lista della spesa ---------- */
@@ -507,9 +604,7 @@ function parseQty(v){
 const fmtNum=n=>new Intl.NumberFormat("it-IT",{maximumFractionDigits:2}).format(n);
 function fmtTotal(fam,total){
   if(!total)return "";
-  if(fam==="m")return total>=1000?fmtNum(total/1000)+" kg":fmtNum(total)+" g";
-  if(fam==="v")return total>=1000?fmtNum(total/1000)+" l":fmtNum(total)+" ml";
-  return fmtNum(total)+" pz";
+  return fmtNum(total)+(fam==="m"?" g":" pz");
 }
 function buildShopping(){
   const map=new Map();
@@ -612,6 +707,9 @@ $("#tab-shop").addEventListener("click",()=>{editing=null;returnTab=null;show("s
 
 (async()=>{
   await load();
+  const before=JSON.stringify(state.recipes);
+  state.recipes=state.recipes.map(fixRecipe);
+  if(JSON.stringify(state.recipes)!==before)save();
   refreshNames();updateBadge();show("plan");
 })();
 </script>
