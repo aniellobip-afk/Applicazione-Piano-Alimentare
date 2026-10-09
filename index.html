@@ -191,6 +191,23 @@
   .carb-tag{display:inline-block;font-size:12px;font-weight:700;padding:1px 8px;border-radius:999px;background:var(--carb-soft);color:#9A5712;margin-left:8px;white-space:nowrap;vertical-align:1px}
   .flag{display:flex;gap:10px;align-items:center;font-size:16px;font-weight:600;cursor:pointer}
   .flag input{width:22px;height:22px;padding:0;accent-color:var(--basil);flex:none}
+  .entry-main{flex:1;min-width:0;cursor:pointer;border-radius:8px}
+  .entry-main:focus-visible{outline:3px solid var(--lemon);outline-offset:2px}
+  .overlay{position:fixed;inset:0;z-index:50;background:rgba(22,37,43,.55);display:flex;align-items:center;justify-content:center;padding:16px}
+  .overlay[hidden]{display:none}
+  .modal{background:#fff;border-radius:20px;width:100%;max-width:440px;max-height:min(80vh,640px);display:flex;flex-direction:column;padding:18px 16px 16px;box-shadow:0 12px 30px rgba(0,0,0,.3)}
+  .d-title{font-family:Georgia,serif;font-size:22px;line-height:1.15;margin:0}
+  .d-tags{display:flex;flex-wrap:wrap;gap:5px;margin-top:8px}
+  .d-tags .tag{margin:0}
+  .d-tags .carb-tag{margin-left:0;vertical-align:baseline}
+  .d-scroll{flex:1;min-height:0;overflow:auto;padding-bottom:4px}
+  .sec{font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);font-weight:700;margin:16px 0 6px}
+  .d-text{font-size:15px;margin:0;white-space:pre-wrap}
+  .ing{list-style:none;margin:0;padding:0;border:1px solid var(--line);border-radius:12px;overflow:hidden}
+  .ing li{display:flex;justify-content:space-between;gap:10px;padding:9px 12px;font-size:15px;border-bottom:1px solid var(--line)}
+  .ing li:last-child{border-bottom:0}
+  .ing li span:last-child{font-weight:700;color:var(--basil-dark);font-variant-numeric:tabular-nums;white-space:nowrap}
+  .d-close{margin-top:12px;width:100%}
   @media (max-width:380px){
     .row{grid-template-columns:1fr 60px 66px 32px}
   }
@@ -233,6 +250,15 @@
       <textarea id="export-text" readonly rows="10" aria-label="Testo della lista della spesa"></textarea>
     </details>
   </section>
+
+  <div class="overlay" id="detail" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="d-title">
+      <h2 class="d-title" id="d-title"></h2>
+      <div class="d-tags" id="d-tags"></div>
+      <div class="d-scroll" id="d-body"></div>
+      <button class="primary d-close" id="d-close">Chiudi</button>
+    </div>
+  </div>
 
   <datalist id="names"></datalist>
   <input type="file" id="imp-file" hidden>
@@ -405,7 +431,7 @@ function renderDay(){
     for(const e of entries){
       const r=recipeById(e.recipeId);
       html+=`<div class="entry" data-eid="${e.id}">
-        <div><span class="entry-name">${esc(rname(r))}</span>${r.carb?`<span class="carb-tag">Carboidrato</span>`:""}<span class="entry-sub">${esc(summary(r))}</span></div>
+        <div class="entry-main" role="button" tabindex="0" aria-haspopup="dialog" aria-label="Dettagli di ${esc(rname(r))}"><span class="entry-name">${esc(rname(r))}</span>${r.carb?`<span class="carb-tag">Carboidrato</span>`:""}<span class="entry-sub">${esc(summary(r))}</span></div>
         <button class="del del-entry" aria-label="Rimuovi ${esc(rname(r))} dal pasto">×</button>
       </div>`;
     }
@@ -425,6 +451,12 @@ $("#day-view").addEventListener("click",e=>{
   const mealEl=e.target.closest("[data-meal]");if(!mealEl)return;
   const mk=mealEl.dataset.meal;
   const t=e.target;
+  const em=t.closest(".entry-main");
+  if(em){
+    const en=slot(current,mk).find(x=>x.id===em.closest(".entry").dataset.eid);
+    if(en)openDetail(en.recipeId,em);
+    return;
+  }
   if(t.closest(".add-open")){
     picker={meal:mk,days:[current],all:false};renderDay();
   }else if(t.closest(".close-picker")){
@@ -450,6 +482,11 @@ $("#day-view").addEventListener("click",e=>{
     state.plan[current][mk]=slot(current,mk).filter(x=>x.id!==eid);
     renderDay();refreshCounts();save();
   }
+});
+$("#day-view").addEventListener("keydown",e=>{
+  if(e.key!=="Enter"&&e.key!==" ")return;
+  const em=e.target.closest&&e.target.closest(".entry-main");if(!em)return;
+  e.preventDefault();em.click();
 });
 let pendingReset=false;
 $("#reset").addEventListener("click",e=>{
@@ -717,7 +754,46 @@ function updateBadge(){
 }
 function refreshCounts(){renderDays();updateBadge();refreshNames();}
 
+/* ---------- Dettaglio ricetta (sola lettura) ---------- */
+let lastFocus=null,detailPushed=false;
+function openDetail(rid,from){
+  const r=recipeById(rid);if(!r)return;
+  lastFocus=from||null;
+  $("#d-title").textContent=rname(r);
+  $("#d-tags").innerHTML=r.tags.map(t=>`<span class="tag">${tagLabel(t)}</span>`).join("")+(r.carb?`<span class="carb-tag">Carboidrato</span>`:"");
+  const ings=r.ingredients.filter(i=>i.name.trim());
+  let html="";
+  if((r.desc||"").trim())html+=`<div class="sec">Descrizione</div><p class="d-text">${esc(r.desc.trim())}</p>`;
+  html+=`<div class="sec">Ingredienti</div>`;
+  html+=ings.length
+    ?`<ul class="ing">${ings.map(i=>{const n=parseQty(i.qty);return `<li><span>${esc(i.name.trim())}</span><span>${n?fmtNum(n)+" "+esc(i.unit):""}</span></li>`;}).join("")}</ul>`
+    :`<p class="empty">Nessun ingrediente.</p>`;
+  $("#d-body").innerHTML=html;
+  $("#d-body").scrollTop=0;
+  $("#detail").hidden=false;
+  document.body.style.overflow="hidden";
+  $("#d-close").focus();
+  // il tasto Indietro di Android chiude il popup invece di uscire dall'app
+  try{history.pushState({detail:1},"");detailPushed=true;}catch(_){detailPushed=false;}
+}
+function closeDetail(fromPop){
+  const o=$("#detail");if(o.hidden)return;
+  o.hidden=true;document.body.style.overflow="";
+  if(detailPushed){detailPushed=false;if(fromPop!==true){try{history.back();}catch(_){}}}
+  if(lastFocus&&lastFocus.focus&&lastFocus.isConnected!==false)lastFocus.focus();
+  lastFocus=null;
+}
+$("#d-close").addEventListener("click",closeDetail);
+window.addEventListener("popstate",()=>closeDetail(true));
+$("#detail").addEventListener("click",e=>{if(e.target===$("#detail"))closeDetail();});
+document.addEventListener("keydown",e=>{
+  if($("#detail").hidden)return;
+  if(e.key==="Escape")closeDetail();
+  else if(e.key==="Tab"){e.preventDefault();$("#d-close").focus();}
+});
+
 function show(tab){
+  closeDetail();
   for(const t of ["plan","rec","shop"]){
     $("#tab-"+t).setAttribute("aria-selected",t===tab);
     $("#view-"+t).hidden=t!==tab;
