@@ -21,6 +21,8 @@
     --basil-dark:#1F4F38;
     --lemon:#F3DA4A;
     --plum:#6B2E4F;
+    --carb:#D9822B;
+    --carb-soft:#FBEBD6;
     --radius:14px;
   }
   *{box-sizing:border-box}
@@ -51,7 +53,7 @@
   }
 
   /* Giorni */
-  .days{display:flex;gap:6px;overflow-x:auto;padding-bottom:6px;margin-bottom:14px;scrollbar-width:thin}
+  .days{display:flex;gap:6px;overflow-x:auto;padding:7px 6px 6px 0;margin-bottom:8px;scrollbar-width:thin}
   .day{
     flex:1 0 auto;min-width:56px;border:1.5px solid var(--line);background:var(--card);
     border-radius:12px;padding:8px 6px;font:inherit;cursor:pointer;text-align:center;color:var(--ink);
@@ -182,6 +184,13 @@
   .rcard-desc{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;font-size:14px;margin:0 0 6px}
   .rec-tools{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 12px}
   .io-msg{color:var(--basil-dark);font-size:14px;font-weight:600;margin:0 0 10px}
+  .day{position:relative}
+  .carb-dot{position:absolute;top:-5px;right:-4px;width:13px;height:13px;border-radius:50%;background:var(--carb);border:2px solid #fff;box-shadow:0 0 0 1px var(--line)}
+  .carb-legend{display:flex;align-items:center;gap:7px;color:var(--muted);font-size:13px;margin:0 0 12px}
+  .carb-dot-inline{width:11px;height:11px;border-radius:50%;background:var(--carb);display:inline-block;flex:none}
+  .carb-tag{display:inline-block;font-size:12px;font-weight:700;padding:1px 8px;border-radius:999px;background:var(--carb-soft);color:#9A5712;margin-left:8px;white-space:nowrap;vertical-align:1px}
+  .flag{display:flex;gap:10px;align-items:center;font-size:16px;font-weight:600;cursor:pointer}
+  .flag input{width:22px;height:22px;padding:0;accent-color:var(--basil);flex:none}
   @media (max-width:380px){
     .row{grid-template-columns:1fr 60px 66px 32px}
   }
@@ -203,6 +212,7 @@
 
   <section id="view-plan">
     <div class="days" id="days"></div>
+    <p class="carb-legend" id="carb-legend" hidden><span class="carb-dot-inline"></span> Pranzo con carboidrato</p>
     <div id="day-view"></div>
     <div class="footer-actions"><button class="ghost" id="reset">Svuota il piano della settimana</button></div>
   </section>
@@ -301,6 +311,7 @@ function fixRecipe(r){
   r.id=r.id||uid();
   r.name=String(r.name==null?"":r.name);
   r.desc=String(r.desc==null?"":r.desc);
+  r.carb=r.carb===true;
   r.tags=Array.isArray(r.tags)?r.tags.filter(t=>TAGS.some(x=>x[0]===t)):[];
   r.ingredients=(Array.isArray(r.ingredients)?r.ingredients:[]).map(fixIngredient);
   return r;
@@ -339,10 +350,17 @@ async function save(){
 
 /* ---------- Piano ---------- */
 function renderDays(){
+  let anyCarb=false;
   $("#days").innerHTML=DAYS.map(([k,full,short])=>{
     const n=dayCount(k);
-    return `<button class="day" data-day="${k}" aria-pressed="${k===current}" aria-label="${full}"><b>${short}</b><small>${n?n+(n===1?" ricetta":" ricette"):""}</small></button>`;
+    const c=lunchCarb(k);
+    if(c)anyCarb=true;
+    return `<button class="day" data-day="${k}" aria-pressed="${k===current}" aria-label="${full}${c?", pranzo con carboidrato":""}">${c?`<span class="carb-dot"></span>`:""}<b>${short}</b><small>${n?n+(n===1?" ricetta":" ricette"):""}</small></button>`;
   }).join("");
+  $("#carb-legend").hidden=!anyCarb;
+}
+function lunchCarb(day){
+  return slot(day,"pranzo").some(e=>{const r=recipeById(e.recipeId);return r&&r.carb;});
 }
 function pickerHtml(mk,tag){
   const recs=state.recipes.filter(r=>picker.all||r.tags.includes(tag));
@@ -357,7 +375,7 @@ function pickerHtml(mk,tag){
     list=recs.map(r=>{
       const u=usage(r.id);if(u)anyUsed=true;
       const times=u+" "+(u===1?"volta":"volte");
-      return `<button class="pick" data-rid="${r.id}"><span class="pick-top"><b>${esc(rname(r))}</b>${u?`<span class="pick-count" aria-label="Usata ${times} nella settimana">${times}</span>`:""}</span><span class="entry-sub">${esc(summary(r))}</span></button>`;
+      return `<button class="pick" data-rid="${r.id}"><span class="pick-top"><span><b>${esc(rname(r))}</b>${r.carb?`<span class="carb-tag">Carboidrato</span>`:""}</span>${u?`<span class="pick-count" aria-label="Usata ${times} nella settimana">${times}</span>`:""}</span><span class="entry-sub">${esc(summary(r))}</span></button>`;
     }).join("");
   }else{
     list=`<p class="empty">${state.recipes.length?`Nessuna ricetta con il tag «${tagLabel(tag)}».`:"Non hai ancora nessuna ricetta."}</p>`;
@@ -387,7 +405,7 @@ function renderDay(){
     for(const e of entries){
       const r=recipeById(e.recipeId);
       html+=`<div class="entry" data-eid="${e.id}">
-        <div><span class="entry-name">${esc(rname(r))}</span><span class="entry-sub">${esc(summary(r))}</span></div>
+        <div><span class="entry-name">${esc(rname(r))}</span>${r.carb?`<span class="carb-tag">Carboidrato</span>`:""}<span class="entry-sub">${esc(summary(r))}</span></div>
         <button class="del del-entry" aria-label="Rimuovi ${esc(rname(r))} dal pasto">×</button>
       </div>`;
     }
@@ -448,7 +466,7 @@ $("#reset").addEventListener("click",e=>{
 
 /* ---------- Ricette ---------- */
 function newRecipe(tag,from){
-  const r={id:uid(),name:"",desc:"",tags:tag?[tag]:[],ingredients:[]};
+  const r={id:uid(),name:"",desc:"",carb:false,tags:tag?[tag]:[],ingredients:[]};
   state.recipes.push(r);editing=r.id;returnTab=from||null;
   focusSel="#r-name";show("rec");save();
 }
@@ -471,7 +489,7 @@ function renderRec(){
     const u=usage(x.id);
     html+=`<button class="rcard" data-rid="${x.id}">
       <span class="rcard-name">${esc(rname(x))}</span>${x.desc&&x.desc.trim()?`<span class="rcard-desc">${esc(x.desc.trim())}</span>`:""}
-      <span>${x.tags.length?x.tags.map(t=>`<span class="tag">${tagLabel(t)}</span>`).join(""):`<span class="entry-sub">Nessun tag</span>`}</span>
+      <span>${x.tags.length?x.tags.map(t=>`<span class="tag">${tagLabel(t)}</span>`).join(""):`<span class="entry-sub">Nessun tag</span>`}${x.carb?`<span class="carb-tag">Carboidrato</span>`:""}</span>
       <span class="rcard-meta">${x.ingredients.filter(i=>i.name.trim()).length} ingredienti · ${u?`in piano ${u} ${u===1?"volta":"volte"}`:"non ancora in piano"}</span>
     </button>`;
   }
@@ -486,6 +504,7 @@ function renderEditor(box,r){
       <textarea id="r-desc" rows="3" placeholder="Es. Cuocere la pasta 10 minuti e condire con il sugo.">${esc(r.desc||"")}</textarea></div>
     <div class="block"><span class="lab" style="display:block;font-weight:600;font-size:14px;margin-bottom:6px">Tag</span>
       <div class="chips">${TAGS.map(([k,l])=>`<button class="chip chip-tag" data-t="${k}" aria-pressed="${r.tags.includes(k)}">${l}</button>`).join("")}</div></div>
+    <div class="block"><label class="flag"><input type="checkbox" id="r-carb" ${r.carb?"checked":""}> Contiene carboidrato</label></div>
     <div class="block"><h3>Ingredienti</h3><div class="rows">`;
   if(!r.ingredients.length)html+=`<p class="empty">Nessun ingrediente.</p>`;
   for(const it of r.ingredients){
@@ -503,6 +522,11 @@ function renderEditor(box,r){
   if(focusSel){const el=box.querySelector(focusSel);if(el)el.focus();focusSel=null;}
 }
 const recView=$("#rec-view");
+recView.addEventListener("change",e=>{
+  if(e.target.id!=="r-carb"||!editing)return;
+  const r=recipeById(editing);if(!r)return;
+  r.carb=e.target.checked;refreshCounts();save();
+});
 recView.addEventListener("click",e=>{
   const t=e.target;
   if(t.closest("#exp-rec"))return exportRecipes();
@@ -583,10 +607,11 @@ $("#imp-file").addEventListener("change",async e=>{
     let added=0,updated=0;
     for(const x of raw){
       if(!x||typeof x!=="object")continue;
+      const hadCarb=("carb" in x);
       const r=fixRecipe(x);
       if(!r.name.trim()&&!r.ingredients.some(i=>i.name.trim()))continue;
       const i=state.recipes.findIndex(y=>y.id===r.id);
-      if(i>=0){state.recipes[i]=r;updated++;}else{state.recipes.push(r);added++;}
+      if(i>=0){if(!hadCarb)r.carb=state.recipes[i].carb;state.recipes[i]=r;updated++;}else{state.recipes.push(r);added++;}
     }
     const n=added+updated;
     save();refreshCounts();
