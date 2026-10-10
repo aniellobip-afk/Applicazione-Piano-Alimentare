@@ -794,19 +794,44 @@ function renderProfiles(){
     +`<button class="pc" data-p="pc" aria-pressed="${pcMode}" aria-label="Planner P&amp;C: pranzi e cene di Nello ed Emma">P&amp;C</button>`;
   renderSyncChip();
 }
+/* Ogni profilo ricorda come l'hai lasciato (scheda, giorno, filtri, lista della spesa...), solo finché l'app resta aperta */
+const uiMem={};
+function saveUi(){
+  if(pcMode)return;
+  uiMem[active]={tab:currentTab,day:current,recFilter,editing,returnTab,shopScope,incDone:$("#inc-done").checked,
+    picker:{meal:picker.meal,days:[...picker.days],all:picker.all}};
+}
+function loadUi(k){
+  const u=uiMem[k];
+  if(!u){
+    // prima visita di questo profilo: scheda e giorno restano quelli in uso, il resto parte pulito
+    closePicker();editing=null;returnTab=null;recFilter="tutte";shopScope=k;
+    $("#inc-done").checked=false;
+    return null;
+  }
+  current=u.day;recFilter=u.recFilter;returnTab=u.returnTab;shopScope=u.shopScope;
+  editing=(u.editing&&db.profiles[k].recipes.some(r=>r.id===u.editing))?u.editing:null;
+  picker={meal:u.picker.meal,days:[...u.picker.days],all:u.picker.all};
+  $("#inc-done").checked=!!u.incDone;
+  return u.tab;
+}
 function switchProfile(k){
   if(k==="pc"){
     if(pcMode)return;
+    saveUi();
     pcMode=true;closePicker();editing=null;returnTab=null;
     renderProfiles();show("pc");return;
   }
   if(!db.profiles[k])return;
   if(k===active&&!pcMode)return;
-  const wasPc=pcMode;pcMode=false;
-  active=k;state=db.profiles[k];shopScope=k;
+  const wasPc=pcMode;
+  if(!wasPc)saveUi();
+  pcMode=false;
+  active=k;state=db.profiles[k];
   try{localStorage.setItem(ACTIVE_KEY,k);}catch(e){}
-  closePicker();editing=null;returnTab=null;recFilter="tutte";
-  renderProfiles();updateBadge();refreshNames();show(wasPc?lastTab:currentTab);
+  const tab=loadUi(k);
+  renderProfiles();updateBadge();refreshNames();
+  show(tab||(wasPc?lastTab:currentTab));
 }
 $("#profiles").addEventListener("click",e=>{const b=e.target.closest("[data-p]");if(b)switchProfile(b.dataset.p);});
 
