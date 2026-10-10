@@ -208,6 +208,23 @@
   .ing li:last-child{border-bottom:0}
   .ing li span:last-child{font-weight:700;color:var(--basil-dark);font-variant-numeric:tabular-nums;white-space:nowrap}
   .d-close{margin-top:12px;width:100%}
+  .who{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:0 0 14px}
+  .seg{display:inline-flex;background:#E3E9E3;padding:3px;border-radius:12px;gap:3px}
+  .seg.full{display:flex;margin-bottom:14px}
+  .seg button{border:0;background:transparent;padding:8px 16px;border-radius:9px;font:inherit;font-weight:700;color:var(--muted);cursor:pointer}
+  .seg.full button{flex:1;padding:9px 6px}
+  .seg button[aria-pressed="true"]{background:var(--basil);color:#fff}
+  .sync-chip{display:inline-flex;align-items:center;gap:7px;border:1.5px solid var(--line);background:#fff;border-radius:999px;padding:6px 12px;font:inherit;font-size:13px;font-weight:600;color:var(--muted);cursor:pointer;white-space:nowrap}
+  .sd{display:inline-block;width:9px;height:9px;border-radius:50%;background:#9AA7AB;flex:none}
+  .sd-ok{background:var(--basil)}
+  .sd-busy{background:var(--lemon)}
+  .sd-error{background:#C0392B}
+  .sd-off{background:#C9D2CA}
+  .field{margin:0 0 12px}
+  .field label{display:block;font-weight:600;font-size:14px;margin:0 0 6px}
+  .c-line{font-size:14px;color:var(--muted);margin:0 0 10px}
+  .c-msg{margin:12px 0 0;font-size:14px;font-weight:600;color:var(--basil-dark)}
+  .c-msg.err{color:#9B2C2C}
   @media (max-width:380px){
     .row{grid-template-columns:1fr 60px 66px 32px}
   }
@@ -220,6 +237,11 @@
 <div class="wrap">
   <h1>Piano pasti</h1>
   <p class="sub">Crea le ricette, assegnale ai pasti della settimana e ottieni la lista della spesa.</p>
+
+  <div class="who">
+    <div class="seg" id="profiles" role="group" aria-label="Profilo"></div>
+    <button class="sync-chip" id="sync-chip" aria-label="Sincronizzazione"></button>
+  </div>
 
   <div class="tabs" role="tablist">
     <button role="tab" id="tab-plan" aria-selected="true">Piano</button>
@@ -237,6 +259,7 @@
   <section id="view-rec" hidden><div id="rec-view"></div></section>
 
   <section id="view-shop" hidden>
+    <div class="seg full" id="shop-scope" role="group" aria-label="Lista di"></div>
     <div class="tools">
       <button class="primary" id="share">Condividi nelle note</button>
       <button class="primary" id="copy">Copia la lista</button>
@@ -257,6 +280,14 @@
       <div class="d-tags" id="d-tags"></div>
       <div class="d-scroll" id="d-body"></div>
       <button class="primary d-close" id="d-close">Chiudi</button>
+    </div>
+  </div>
+
+  <div class="overlay" id="cloud-dlg" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="c-title">
+      <h2 class="d-title" id="c-title">Sincronizzazione</h2>
+      <div class="d-scroll" id="c-body" style="margin-top:12px"></div>
+      <button class="ghost d-close" id="c-close">Chiudi</button>
     </div>
   </div>
 
@@ -286,8 +317,15 @@ const TAGS=[["colazione","Colazione"],["spuntino","Spuntino"],["pranzo","Pranzo"
 const UNITS={g:["m",1],pz:["p",1]};
 const LEGACY_UNITS={kg:1000,l:1000,ml:1}; // solo per convertire i dati salvati con le vecchie unità
 const KEY="piano-pasti-v2", OLD_KEY="piano-pasti-v1";
+const KEY3="piano-pasti-v3", ACTIVE_KEY="piano-pasti-attivo", CLOUD_KEY="piano-pasti-cloud", DEV_KEY="piano-pasti-device";
+const PROFILES=[["nello","Nello"],["emma","Emma"]];
+const SCOPES=["nello","emma","insieme"];
 
-let state={recipes:[],plan:{},checked:{}};
+let db=null;                 // tutti i dati locali (due profili + spunte condivise)
+let active="nello";          // profilo in uso su questo dispositivo
+let state={recipes:[],plan:{}}; // dati del profilo attivo (stesso oggetto di db.profiles[active])
+let shopScope="nello";       // lista della spesa mostrata: nello / emma / insieme
+let currentTab="plan", pendingUI=false;
 let current=DAYS[(new Date().getDay()+6)%7][0];
 let picker={meal:null,days:[],all:false};
 let editing=null, recFilter="tutte", returnTab=null, focusSel=null;
@@ -360,19 +398,327 @@ function migrate(old){
   }
   return s;
 }
+function newDb(){
+  const d={profiles:{},shared:{},meta:{}};
+  for(const [k] of PROFILES){d.profiles[k]={recipes:[],plan:{}};d.meta[k]={base:0,dirty:false,t:0,seq:0};}
+  for(const sc of SCOPES)d.shared[sc]={};
+  return d;
+}
+db=newDb();
+function normalizeDb(d){
+  const n=newDb();
+  for(const [k] of PROFILES){
+    const src=(d.profiles&&d.profiles[k])||{};
+    n.profiles[k]={recipes:(Array.isArray(src.recipes)?src.recipes:[]).map(fixRecipe),plan:(src.plan&&typeof src.plan==="object")?src.plan:{}};
+    const m=(d.meta&&d.meta[k])||{};
+    n.meta[k]={base:Number(m.base)||0,dirty:!!m.dirty,t:Number(m.t)||0,seq:0};
+  }
+  for(const sc of SCOPES){
+    const src=(d.shared&&d.shared[sc])||{};
+    for(const key in src){const e=src[key];if(e&&typeof e.t==="number")n.shared[sc][key]={c:!!e.c,t:e.t};}
+  }
+  return n;
+}
+function finishLoad(){state=db.profiles[active];shopScope=active;}
 async function load(){
+  try{const a=localStorage.getItem(ACTIVE_KEY);if(PROFILES.some(x=>x[0]===a))active=a;}catch(e){}
   try{
-    const r=await store.get(KEY);
-    if(r&&r.value){const s=JSON.parse(r.value);state={recipes:s.recipes||[],plan:s.plan||{},checked:s.checked||{}};return;}
+    const r=await store.get(KEY3);
+    if(r&&r.value){db=normalizeDb(JSON.parse(r.value));finishLoad();return;}
   }catch(e){}
-  try{
-    const r=await store.get(OLD_KEY);
-    if(r&&r.value){state=migrate(JSON.parse(r.value));save();}
-  }catch(e){}
+  // primo avvio dopo l'aggiornamento: i dati esistenti passano al profilo Nello
+  let old=null;
+  try{const r=await store.get(KEY);if(r&&r.value){const o=JSON.parse(r.value);old={recipes:o.recipes||[],plan:o.plan||{},checked:o.checked||{}};}}catch(e){}
+  if(!old){try{const r=await store.get(OLD_KEY);if(r&&r.value){const o=migrate(JSON.parse(r.value));old={recipes:o.recipes,plan:o.plan,checked:o.checked||{}};}}catch(e){}}
+  db=newDb();
+  if(old){
+    const now=Date.now();
+    db.profiles.nello={recipes:old.recipes.map(fixRecipe),plan:old.plan};
+    for(const k in old.checked)db.shared.nello[k]={c:true,t:now};
+    db.meta.nello.dirty=true;db.meta.nello.t=now;
+    await saveLocal();
+  }
+  finishLoad();
 }
+async function saveLocal(){try{await store.set(KEY3,JSON.stringify(db));}catch(e){console.error(e);}}
 async function save(){
-  try{await store.set(KEY,JSON.stringify(state));}catch(e){console.error(e);}
+  const m=db.meta[active];m.dirty=true;m.t=Date.now();m.seq=(m.seq||0)+1;
+  await saveLocal();scheduleSync();
 }
+async function saveShared(){await saveLocal();scheduleSync(600);}
+
+/* spunte della lista della spesa (condivise tra i dispositivi) */
+function isChecked(scope,key){const e=db.shared[scope]&&db.shared[scope][key];return !!(e&&e.c);}
+function setChecked(scope,key,val){db.shared[scope][key]={c:!!val,t:Date.now()};}
+function clearChecked(scope){const now=Date.now();const m=db.shared[scope];for(const k in m){if(m[k].c)m[k]={c:false,t:now};}}
+
+/* ---------- Cloud (Firebase Realtime Database, tramite REST) ---------- */
+let cloud=null;                       // {u: indirizzo, c: codice, k: chiave}
+let syncStatus="off",syncMsg="",lastSync=0;
+let syncing=false,syncAgain=false,syncTimer=null,loopsOn=false;
+const SYNC_LABELS={off:"Non collegato",busy:"Sincronizzo…",ok:"Sincronizzato",offline:"Offline",error:"Errore"};
+
+function cleanUrl(u){
+  u=String(u||"").trim().replace(/\.json$/i,"").replace(/\/+$/,"");
+  return /^https:\/\/[^\s\/]+\.(firebaseio\.com|firebasedatabase\.app)$/i.test(u)?u:null;
+}
+async function householdKey(code){
+  const norm=String(code).trim().toLowerCase();
+  try{
+    if(typeof crypto!=="undefined"&&crypto.subtle){
+      const b=await crypto.subtle.digest("SHA-256",new TextEncoder().encode("piano-pasti:"+norm));
+      return "k"+[...new Uint8Array(b)].map(x=>x.toString(16).padStart(2,"0")).join("");
+    }
+  }catch(e){}
+  return "c"+encodeURIComponent(norm).replace(/[.$#\[\]\/%]/g,ch=>"_"+ch.charCodeAt(0).toString(16));
+}
+async function makeCloud(u,c){
+  const url=cleanUrl(u),code=String(c||"").trim();
+  if(!url||!code)return null;
+  return {u:url,c:code,k:await householdKey(code)};
+}
+async function rt(method,path,body){
+  const opt={method,cache:"no-store"};
+  if(body!==undefined){opt.headers={"Content-Type":"application/json"};opt.body=JSON.stringify(body);}
+  const r=await fetch(cloud.u+"/h/"+cloud.k+path+".json",opt);
+  if(!r.ok){const e=new Error("HTTP "+r.status);e.status=r.status;throw e;}
+  return await r.json();
+}
+function deviceId(){
+  let d=null;try{d=localStorage.getItem(DEV_KEY);}catch(e){}
+  if(!d){d=uid()+uid();try{localStorage.setItem(DEV_KEY,d);}catch(e){}}
+  return d;
+}
+const encKey=k=>encodeURIComponent(k).replace(/\./g,"%2E");
+const decKey=k=>{try{return decodeURIComponent(k);}catch(e){return k;}};
+
+function setSync(st,msg){
+  syncStatus=st;syncMsg=msg||"";
+  renderSyncChip();
+  if(!$("#cloud-dlg").hidden&&cloud)renderCloud("");
+}
+function renderSyncChip(){
+  const b=$("#sync-chip");
+  b.innerHTML=`<span class="sd sd-${syncStatus}"></span>${SYNC_LABELS[syncStatus]}`;
+  b.setAttribute("aria-label","Sincronizzazione: "+SYNC_LABELS[syncStatus]);
+}
+function profileHasData(k){
+  const d=db.profiles[k];if(d.recipes.length)return true;
+  for(const dk in d.plan)for(const mk in d.plan[dk])if(d.plan[dk][mk].length)return true;
+  return false;
+}
+function scheduleSync(ms){
+  if(!cloud)return;
+  clearTimeout(syncTimer);
+  syncTimer=setTimeout(syncNow,ms==null?1500:ms);
+}
+async function pushProfile(k,rev){
+  const m=db.meta[k],seq=m.seq||0;
+  await rt("PUT","/profiles/"+k,{d:JSON.stringify(db.profiles[k]),r:rev,t:m.t||Date.now(),w:deviceId()});
+  m.base=rev;
+  if((m.seq||0)===seq)m.dirty=false;
+}
+function adoptRemote(k,r){
+  let data;try{data=JSON.parse(r.d);}catch(e){return false;}
+  const clean={recipes:(Array.isArray(data.recipes)?data.recipes:[]).map(fixRecipe),plan:(data.plan&&typeof data.plan==="object")?data.plan:{}};
+  db.profiles[k]=clean;
+  const m=db.meta[k];m.base=Number(r.r)||0;m.dirty=false;m.t=Number(r.t)||0;
+  if(k===active)state=clean;
+  return true;
+}
+function mergeFirst(k,r){
+  // dati locali mai sincronizzati + dati già nel cloud: si tiene il cloud e si aggiungono le ricette locali nuove
+  let data;try{data=JSON.parse(r.d);}catch(e){return false;}
+  const rec=(Array.isArray(data.recipes)?data.recipes:[]).map(fixRecipe);
+  const ids=new Set(rec.map(x=>x.id));
+  for(const x of db.profiles[k].recipes)if(!ids.has(x.id))rec.push(x);
+  db.profiles[k]={recipes:rec,plan:(data.plan&&typeof data.plan==="object")?data.plan:{}};
+  if(k===active)state=db.profiles[k];
+  return true;
+}
+async function syncNow(){
+  if(!cloud)return;
+  if(syncing){syncAgain=true;return;}
+  syncing=true;setSync("busy");
+  let changed=false;
+  try{
+    const remote=(await rt("GET",""))||{};
+    const rp=remote.profiles||{};
+    for(const [k] of PROFILES){
+      const m=db.meta[k],r=rp[k];
+      if(!r||typeof r.d!=="string"){
+        if(m.dirty||profileHasData(k))await pushProfile(k,Math.max(m.base,0)+1);
+        continue;
+      }
+      const R=Number(r.r)||0;
+      if(R===m.base){
+        if(m.dirty)await pushProfile(k,R+1);
+      }else if(R>m.base){
+        if(!m.dirty){if(adoptRemote(k,r))changed=true;}
+        else if(m.base===0){if(mergeFirst(k,r)){changed=true;m.seq=(m.seq||0)+1;await pushProfile(k,R+1);}}
+        else if((m.t||0)>Number(r.t||0))await pushProfile(k,R+1);
+        else if(adoptRemote(k,r))changed=true;
+      }else await pushProfile(k,m.base+1);
+    }
+    const rs=remote.shared||{};
+    for(const sc of SCOPES){
+      const rem=rs[sc]||{},loc=db.shared[sc],patch={};
+      for(const ek in rem){
+        const re=rem[ek];if(!re||typeof re.t!=="number")continue;
+        const key=decKey(ek),le=loc[key];
+        if(!le||le.t<re.t){loc[key]={c:!!re.c,t:re.t};changed=true;}
+      }
+      for(const key in loc){
+        const ek=encKey(key),re=rem[ek];
+        if(!re||re.t<loc[key].t)patch[ek]={c:loc[key].c,t:loc[key].t};
+      }
+      if(Object.keys(patch).length)await rt("PATCH","/shared/"+sc,patch);
+    }
+    lastSync=Date.now();
+    await saveLocal();
+    setSync("ok");
+    if(changed)refreshUI();
+  }catch(e){
+    if(e&&(e.status===401||e.status===403))setSync("error","Permesso negato dal database: controlla le regole su Firebase.");
+    else if(e&&e.status)setSync("error","Il database ha risposto con un errore ("+e.status+").");
+    else setSync("offline","Nessuna connessione: i dati restano sul dispositivo e verranno inviati appena possibile.");
+  }finally{
+    syncing=false;
+    if(syncAgain){syncAgain=false;scheduleSync(300);}
+  }
+}
+function startLoops(){
+  if(loopsOn)return;loopsOn=true;
+  setInterval(()=>{if(cloud&&!document.hidden)syncNow();},20000);
+  document.addEventListener("visibilitychange",()=>{if(cloud&&!document.hidden)syncNow();});
+  window.addEventListener("online",()=>{if(cloud)syncNow();});
+}
+function saveCloudCfg(){try{localStorage.setItem(CLOUD_KEY,JSON.stringify({u:cloud.u,c:cloud.c}));}catch(e){}}
+async function initCloud(){
+  try{
+    const c=JSON.parse(localStorage.getItem(CLOUD_KEY)||"null");
+    if(c)cloud=await makeCloud(c.u,c.c);
+  }catch(e){}
+}
+async function handleInvite(){
+  const h=location.hash||"";
+  if(!h.startsWith("#invito="))return false;
+  let cfg=null;
+  try{cfg=JSON.parse(decodeURIComponent(atob(h.slice(8))));}catch(e){}
+  try{history.replaceState(null,"",location.pathname+location.search);}catch(e){}
+  if(!cfg)return false;
+  const nc=await makeCloud(cfg.u,cfg.c);
+  if(!nc)return false;
+  cloud=nc;saveCloudCfg();
+  return true;
+}
+async function connectCloud(u,c){
+  const nc=await makeCloud(u,c);
+  if(!nc){renderCloud("Controlla l'indirizzo (deve finire con firebasedatabase.app o firebaseio.com) e inserisci il codice.",true);return;}
+  const old=cloud;cloud=nc;
+  try{await rt("GET","");}
+  catch(e){
+    cloud=old;
+    renderCloud(e&&e.status?(e.status===401||e.status===403?"Permesso negato: controlla le regole del database su Firebase.":"Il database ha risposto con un errore ("+e.status+")."):"Non riesco a raggiungere il database: controlla l'indirizzo e la connessione.",true);
+    return;
+  }
+  saveCloudCfg();
+  renderCloud("Collegato. Sincronizzo i dati…");
+  await syncNow();
+  renderCloud(syncStatus==="ok"?"Collegato e sincronizzato.":"");
+}
+function disconnectCloud(){
+  cloud=null;
+  try{localStorage.removeItem(CLOUD_KEY);}catch(e){}
+  for(const [k] of PROFILES){db.meta[k].base=0;db.meta[k].dirty=profileHasData(k);}
+  saveLocal();
+  setSync("off");
+  renderCloud("Dispositivo scollegato: i dati restano qui ma non vengono più sincronizzati.");
+}
+
+/* finestra di sincronizzazione */
+function renderCloud(msg,isErr){
+  let h="";
+  if(!cloud){
+    h+=`<p class="c-line">Collega un database Firebase per avere gli stessi dati su tutti i dispositivi.</p>
+      <div class="field"><label for="c-url">Indirizzo del database</label><input id="c-url" type="url" inputmode="url" placeholder="https://…firebasedatabase.app" autocomplete="off" autocapitalize="off" spellcheck="false"></div>
+      <div class="field"><label for="c-code">Codice condiviso</label><input id="c-code" type="text" placeholder="Lo stesso su tutti i dispositivi" autocomplete="off" autocapitalize="off" spellcheck="false"></div>
+      <button class="primary" id="c-connect" style="width:100%">Collega</button>`;
+  }else{
+    const t=lastSync?new Date(lastSync).toLocaleTimeString("it-IT",{hour:"2-digit",minute:"2-digit"}):"";
+    h+=`<p class="c-line"><span class="sd sd-${syncStatus}"></span> <b>${SYNC_LABELS[syncStatus]}</b>${t?` · ultimo aggiornamento alle ${t}`:""}</p>
+      <p class="c-line">Database: ${esc(cloud.u.replace("https://",""))}</p>
+      <div class="tools"><button class="primary" id="c-sync">Sincronizza ora</button><button class="ghost" id="c-invite">Copia link di invito</button></div>
+      <p class="c-line">Per collegare un altro dispositivo, apri da lì il link di invito.</p>
+      <button class="ghost" id="c-disc">Scollega questo dispositivo</button>`;
+  }
+  const m=msg||(cloud&&syncStatus!=="ok"&&syncStatus!=="busy"?syncMsg:"");
+  if(m)h+=`<p class="c-msg${(isErr||syncStatus==="error")?" err":""}" role="status">${esc(m)}</p>`;
+  $("#c-body").innerHTML=h;
+}
+function openCloud(msg){
+  renderCloud(msg||"");
+  $("#cloud-dlg").hidden=false;document.body.style.overflow="hidden";
+}
+function closeCloud(){
+  $("#cloud-dlg").hidden=true;document.body.style.overflow="";
+  if(pendingUI)refreshUI();
+}
+function inviteLink(){
+  return location.origin+location.pathname+"#invito="+btoa(encodeURIComponent(JSON.stringify({u:cloud.u,c:cloud.c})));
+}
+let pendingDisc=false;
+$("#c-body").addEventListener("click",async e=>{
+  const t=e.target;
+  if(t.closest("#c-connect"))return connectCloud($("#c-url").value,$("#c-code").value);
+  if(t.closest("#c-sync")){await syncNow();return renderCloud(syncStatus==="ok"?"Sincronizzato.":"");}
+  if(t.closest("#c-invite")){
+    const link=inviteLink();let ok=false;
+    try{await navigator.clipboard.writeText(link);ok=true;}catch(_){}
+    return renderCloud(ok?"Link copiato. Invialo all'altra persona (per esempio su WhatsApp) e fallo aprire dal suo dispositivo.":"Non riesco a copiarlo automaticamente. Link: "+link);
+  }
+  if(t.closest("#c-disc")){
+    const b=t.closest("#c-disc");
+    if(!pendingDisc){
+      pendingDisc=true;b.textContent="Conferma: scollega";b.classList.add("danger");
+      setTimeout(()=>{pendingDisc=false;if(b.isConnected){b.textContent="Scollega questo dispositivo";b.classList.remove("danger");}},4000);
+      return;
+    }
+    pendingDisc=false;disconnectCloud();
+  }
+});
+$("#c-close").addEventListener("click",closeCloud);
+$("#cloud-dlg").addEventListener("click",e=>{if(e.target===$("#cloud-dlg"))closeCloud();});
+document.addEventListener("keydown",e=>{if(e.key==="Escape"&&!$("#cloud-dlg").hidden)closeCloud();});
+$("#sync-chip").addEventListener("click",()=>openCloud());
+
+/* profili e aggiornamento dell'interfaccia */
+function renderProfiles(){
+  $("#profiles").innerHTML=PROFILES.map(([k,l])=>`<button data-p="${k}" aria-pressed="${k===active}">${l}</button>`).join("");
+  renderSyncChip();
+}
+function switchProfile(k){
+  if(k===active||!db.profiles[k])return;
+  active=k;state=db.profiles[k];shopScope=k;
+  try{localStorage.setItem(ACTIVE_KEY,k);}catch(e){}
+  closePicker();editing=null;returnTab=null;recFilter="tutte";
+  renderProfiles();updateBadge();refreshNames();show(currentTab);
+}
+$("#profiles").addEventListener("click",e=>{const b=e.target.closest("[data-p]");if(b)switchProfile(b.dataset.p);});
+function uiBusy(){
+  const a=document.activeElement;
+  const typing=!!(a&&((a.tagName==="INPUT"&&a.type!=="checkbox"&&a.type!=="file")||a.tagName==="TEXTAREA"||a.tagName==="SELECT"));
+  return typing||!$("#detail").hidden||!$("#cloud-dlg").hidden;
+}
+function refreshUI(){
+  if(uiBusy()){pendingUI=true;return;}
+  pendingUI=false;
+  renderProfiles();updateBadge();refreshNames();
+  if(currentTab==="plan"){renderDays();renderDay();}
+  else if(currentTab==="rec")renderRec();
+  else renderShop();
+}
+document.addEventListener("focusout",()=>setTimeout(()=>{if(pendingUI)refreshUI();},300));
 
 /* ---------- Piano ---------- */
 function renderDays(){
@@ -496,9 +842,9 @@ $("#reset").addEventListener("click",e=>{
     setTimeout(()=>{pendingReset=false;b.textContent="Svuota il piano della settimana";b.classList.remove("danger");},4000);
     return;
   }
-  state.plan={};state.checked={};pendingReset=false;
+  state.plan={};clearChecked(active);pendingReset=false;
   b.textContent="Svuota il piano della settimana";b.classList.remove("danger");
-  closePicker();renderDay();refreshCounts();save();
+  closePicker();renderDay();refreshCounts();save();saveShared();
 });
 
 /* ---------- Ricette ---------- */
@@ -668,57 +1014,72 @@ function fmtTotal(fam,total){
   if(!total)return "";
   return fmtNum(total)+(fam==="m"?" g":" pz");
 }
-function buildShopping(){
+function buildShopping(scope){
+  scope=scope||shopScope;
+  const who=scope==="insieme"?PROFILES.map(x=>x[0]):[scope];
   const map=new Map();
-  for(const [dk] of DAYS){
-    for(const [mk] of MEALS){
-      for(const en of ((state.plan[dk]||{})[mk]||[])){
-        const r=recipeById(en.recipeId);if(!r)continue;
-        for(const it of r.ingredients){
-          const name=it.name.trim().replace(/\s+/g," ");if(!name)continue;
-          const [fam,mult]=UNITS[it.unit]||UNITS.g;
-          const key=name.toLowerCase()+"|"+fam;
-          if(!map.has(key))map.set(key,{key,name:name.charAt(0).toUpperCase()+name.slice(1),fam,total:0,uses:new Map()});
-          const x=map.get(key);
-          x.total+=parseQty(it.qty)*mult;
-          x.uses.set(rname(r),(x.uses.get(rname(r))||0)+1);
+  for(const k of who){
+    const dp=db.profiles[k],pname=PROFILES.find(x=>x[0]===k)[1];
+    for(const [dk] of DAYS){
+      for(const [mk] of MEALS){
+        for(const en of ((dp.plan[dk]||{})[mk]||[])){
+          const r=dp.recipes.find(x=>x.id===en.recipeId);if(!r)continue;
+          for(const it of r.ingredients){
+            const name=it.name.trim().replace(/\s+/g," ");if(!name)continue;
+            const [fam,mult]=UNITS[it.unit]||UNITS.g;
+            const key=name.toLowerCase()+"|"+fam;
+            if(!map.has(key))map.set(key,{key,name:name.charAt(0).toUpperCase()+name.slice(1),fam,total:0,uses:new Map()});
+            const x=map.get(key);
+            x.total+=parseQty(it.qty)*mult;
+            const label=scope==="insieme"?`${rname(r)} (${pname})`:rname(r);
+            x.uses.set(label,(x.uses.get(label)||0)+1);
+          }
         }
       }
     }
   }
   return [...map.values()].sort((a,b)=>a.name.localeCompare(b.name,"it"));
 }
+function renderScope(){
+  const items=[...PROFILES,["insieme","Insieme"]];
+  $("#shop-scope").innerHTML=items.map(([k,l])=>`<button data-s="${k}" aria-pressed="${k===shopScope}">${l}</button>`).join("");
+}
+$("#shop-scope").addEventListener("click",e=>{
+  const b=e.target.closest("[data-s]");if(!b)return;
+  shopScope=b.dataset.s;renderShop();updateBadge();
+});
 function exportText(){
   const inc=$("#inc-done").checked;
   return buildShopping()
-    .filter(i=>inc||!state.checked[i.key])
+    .filter(i=>inc||!isChecked(shopScope,i.key))
     .map(i=>"• "+i.name+(i.total?" – "+fmtTotal(i.fam,i.total):""))
     .join("\n");
 }
 function renderShop(){
+  renderScope();
   const items=buildShopping();
   $("#export-text").value=exportText();
-  const done=items.filter(i=>state.checked[i.key]).length;
+  const done=items.filter(i=>isChecked(shopScope,i.key)).length;
   $("#progress").textContent=items.length?`${done} di ${items.length} nel carrello`:"";
   if(!items.length){
     $("#shop-view").innerHTML=`<p class="state">La lista è vuota. Assegna delle ricette ai pasti nel Piano e gli ingredienti compariranno qui.</p>`;
     return;
   }
-  const ordered=[...items.filter(i=>!state.checked[i.key]),...items.filter(i=>state.checked[i.key])];
+  const ordered=[...items.filter(i=>!isChecked(shopScope,i.key)),...items.filter(i=>isChecked(shopScope,i.key))];
   $("#shop-view").innerHTML=`<ul class="shop">`+ordered.map(i=>{
     const uses=[...i.uses].map(([n,c])=>n+(c>1?` ×${c}`:"")).join(", ");
-    return `<li class="${state.checked[i.key]?"done":""}"><label>
-      <input type="checkbox" data-key="${esc(i.key)}" ${state.checked[i.key]?"checked":""}>
+    return `<li class="${isChecked(shopScope,i.key)?"done":""}"><label>
+      <input type="checkbox" data-key="${esc(i.key)}" ${isChecked(shopScope,i.key)?"checked":""}>
       <span class="item-main"><span><span class="item-name">${esc(i.name)}</span><span class="item-uses">${esc(uses)}</span></span>
       <span class="item-qty">${fmtTotal(i.fam,i.total)}</span></span>
     </label></li>`;}).join("")+`</ul>`;
 }
 $("#shop-view").addEventListener("change",e=>{
   const k=e.target.dataset.key;if(k===undefined)return;
-  if(e.target.checked)state.checked[k]=true;else delete state.checked[k];
-  renderShop();save();
+  setChecked(shopScope,k,e.target.checked);
+  renderShop();updateBadge();saveShared();
 });
-$("#uncheck").addEventListener("click",()=>{state.checked={};renderShop();save();});
+$("#uncheck").addEventListener("click",()=>{clearChecked(shopScope);renderShop();saveShared();});
 function flash(b,msg,orig){b.textContent=msg;setTimeout(()=>b.textContent=orig,1800);}
 $("#inc-done").addEventListener("change",()=>{$("#export-text").value=exportText();});
 $("#export-text").addEventListener("focus",e=>e.target.select());
@@ -738,7 +1099,7 @@ if(!navigator.share)$("#share").hidden=true;
 $("#share").addEventListener("click",async e=>{
   const b=e.target,txt=exportText();
   if(!txt)return flash(b,"Niente da condividere","Condividi nelle note");
-  try{await navigator.share({title:"Lista della spesa",text:txt});}
+  try{await navigator.share({title:"Lista della spesa – "+({nello:"Nello",emma:"Emma",insieme:"Nello ed Emma"}[shopScope]),text:txt});}
   catch(err){if(err&&err.name!=="AbortError")flash(b,"Condivisione non riuscita","Condividi nelle note");}
 });
 
@@ -793,7 +1154,7 @@ document.addEventListener("keydown",e=>{
 });
 
 function show(tab){
-  closeDetail();
+  closeDetail();currentTab=tab;
   for(const t of ["plan","rec","shop"]){
     $("#tab-"+t).setAttribute("aria-selected",t===tab);
     $("#view-"+t).hidden=t!==tab;
@@ -808,10 +1169,15 @@ $("#tab-shop").addEventListener("click",()=>{editing=null;returnTab=null;show("s
 
 (async()=>{
   await load();
-  const before=JSON.stringify(state.recipes);
-  state.recipes=state.recipes.map(fixRecipe);
-  if(JSON.stringify(state.recipes)!==before)save();
-  refreshNames();updateBadge();show("plan");
+  const invited=await handleInvite();
+  if(!invited)await initCloud();
+  refreshNames();updateBadge();renderProfiles();show("plan");
+  startLoops();
+  if(cloud){
+    setSync("busy");
+    await syncNow();
+    if(invited)openCloud("Dispositivo collegato: i dati sono stati scaricati.");
+  }else setSync("off");
 })();
 </script>
 </body>
