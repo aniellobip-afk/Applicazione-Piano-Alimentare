@@ -262,6 +262,21 @@
   .rc-row:first-of-type{border-top:0}
   .rc-row b{color:var(--basil-dark);font-variant-numeric:tabular-nums;white-space:nowrap}
   .rc-row .pc-r{width:auto;flex:1}
+  .pc-tip{margin:4px 0 0;color:var(--muted);font-size:13px}
+  .pc-cell{border-radius:8px;padding:4px 6px;margin:-4px -6px;min-height:34px;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
+  .pc-cell:not([data-n="0"]){cursor:grab}
+  .pc-cell.pc-flash{background:#FFF3C4}
+  #pc-view[data-dragging] .pc-cell{opacity:.35}
+  #pc-view[data-drag-p="nello"][data-drag-m="pranzo"] .pc-cell[data-p="nello"][data-m="pranzo"],
+  #pc-view[data-drag-p="nello"][data-drag-m="cena"] .pc-cell[data-p="nello"][data-m="cena"],
+  #pc-view[data-drag-p="emma"][data-drag-m="pranzo"] .pc-cell[data-p="emma"][data-m="pranzo"],
+  #pc-view[data-drag-p="emma"][data-drag-m="cena"] .pc-cell[data-p="emma"][data-m="cena"]{opacity:1;outline:2px dashed var(--basil)}
+  .pc-cell.drop-hover{background:#E8F1EA;outline:2px solid var(--basil)!important}
+  .pc-cell.drag-src{opacity:.2!important;outline:none!important}
+  .pc-ghost{position:fixed;z-index:60;transform:translate(-50%,-60%);pointer-events:none;background:#fff;border:1.5px solid var(--basil);border-radius:12px;padding:8px 10px;box-shadow:0 8px 24px rgba(0,0,0,.25);min-width:140px;max-width:70vw}
+  .toast{position:fixed;left:12px;right:12px;bottom:16px;max-width:520px;margin:0 auto;z-index:70;background:var(--ink);color:#fff;border-radius:12px;padding:10px 12px 10px 14px;display:flex;align-items:center;justify-content:space-between;gap:12px;box-shadow:0 8px 24px rgba(0,0,0,.3);font-size:14.5px}
+  .toast[hidden]{display:none}
+  .toast-btn{border:0;background:transparent;color:var(--lemon);font:inherit;font-weight:700;cursor:pointer;padding:6px 8px;flex:none}
   @media (max-width:380px){
     .row{grid-template-columns:1fr 60px 66px 32px}
   }
@@ -328,6 +343,8 @@
     </div>
   </div>
 
+  <div class="toast" id="toast" role="status" hidden><span id="toast-msg"></span><button class="toast-btn" id="toast-undo">Annulla</button></div>
+
   <div class="overlay" id="cat-dlg" hidden>
     <div class="modal" role="dialog" aria-modal="true" aria-labelledby="cat-title">
       <h2 class="d-title" id="cat-title"></h2>
@@ -391,7 +408,7 @@ let db=null;                 // tutti i dati locali (due profili + spunte condiv
 let active="nello";          // profilo in uso su questo dispositivo
 let state={recipes:[],plan:{}}; // dati del profilo attivo (stesso oggetto di db.profiles[active])
 let shopScope="nello";       // lista della spesa mostrata: nello / emma / insieme
-let currentTab="plan", lastTab="plan", pendingUI=false, pcMode=false;
+let currentTab="plan", lastTab="plan", pendingUI=false, pcMode=false, moveFlash=null, lastMove=null;
 let current=DAYS[(new Date().getDay()+6)%7][0];
 let picker={meal:null,days:[],all:false};
 let editing=null, recFilter="tutte", returnTab=null, focusSel=null;
@@ -854,13 +871,14 @@ function renderPC(){
       for(const [k,pn] of PROFILES){
         const rs=pcRecipes(k,dk,mk);
         if(rs.some(r=>r.carb))anyCarb=true;
-        body+=`<div><span class="pc-who ${k==="nello"?"n":"e"}">${pn}</span>${rs.length?rs.map(r=>recipeBtn(r,k,true)).join(""):`<p class="pc-none">—</p>`}</div>`;
+        const fl=!!(moveFlash&&moveFlash.p===k&&moveFlash.m===mk&&moveFlash.days.includes(dk));
+        body+=`<div class="pc-cell${fl?" pc-flash":""}" data-p="${k}" data-d="${dk}" data-m="${mk}" data-n="${rs.length}"><span class="pc-who ${k==="nello"?"n":"e"}">${pn}</span>${rs.length?rs.map(r=>recipeBtn(r,k,true)).join(""):`<p class="pc-none">—</p>`}</div>`;
       }
       body+=`</div></div>`;
     }
     body+=`</div>`;
   }
-  $("#pc-view").innerHTML=`<div class="pc-head"><h2>Planner P&amp;C</h2><p>Pranzi e cene · Nello ed Emma · sola lettura</p></div>`
+  $("#pc-view").innerHTML=`<div class="pc-head"><h2>Planner P&amp;C</h2><p>Pranzi e cene · Nello ed Emma</p><p class="pc-tip">Tieni premuto un pasto e trascinalo su un altro giorno. Se è occupato, i due pasti si scambiano.</p></div>`
     +(anyCarb?`<p class="carb-legend"><span class="carb-dot-inline"></span> Contiene carboidrato</p>`:"")+body;
 }
 function renderRecap(){
@@ -876,11 +894,142 @@ function renderRecap(){
   }
   $("#recap-view").innerHTML=h;
 }
-for(const id of ["#pc-view","#recap-view"])$(id).addEventListener("click",e=>{const b=e.target.closest(".pc-r");if(b)openDetail(b.dataset.rid,b,b.dataset.p);});
+for(const id of ["#pc-view","#recap-view"])$(id).addEventListener("click",e=>{
+  if(Date.now()<dragSuppress)return;
+  const b=e.target.closest(".pc-r");if(b)openDetail(b.dataset.rid,b,b.dataset.p);
+});
+
+/* ---------- Spostare i pasti in P&C con il trascinamento ---------- */
+const LONG_MS=450,MOVE_PX=8;
+let drag=null,dragWait=null,dragSuppress=0,toastTimer=null;
+const cellInfo=c=>(c&&c.dataset&&c.dataset.p)?{p:c.dataset.p,m:c.dataset.m,d:c.dataset.d,n:Number(c.dataset.n)||0}:null;
+function cellAt(x,y){
+  const el=document.elementFromPoint?document.elementFromPoint(x,y):null;
+  return (el&&el.closest)?el.closest(".pc-cell"):null;
+}
+function touchProfile(k){const m=db.meta[k];m.dirty=true;m.t=Date.now();m.seq=(m.seq||0)+1;}
+/* scambia i pasti di due giorni dello stesso profilo: se la destinazione è libera il pasto si sposta e la partenza resta vuota */
+function movePasto(k,meal,from,to){
+  if(from===to||!db.profiles[k])return null;
+  const dp=db.profiles[k];
+  dp.plan[from]=dp.plan[from]||{};dp.plan[to]=dp.plan[to]||{};
+  const a=dp.plan[from][meal]||[],b=dp.plan[to][meal]||[];
+  if(!a.length)return null;
+  dp.plan[from][meal]=b;dp.plan[to][meal]=a;
+  return {swap:b.length>0};
+}
+const dayShort=d=>DAYS.find(x=>x[0]===d)[2].toLowerCase();
+function showToast(msg,undo){
+  $("#toast-msg").textContent=msg;
+  $("#toast-undo").hidden=!undo;
+  $("#toast").hidden=false;
+  clearTimeout(toastTimer);
+  toastTimer=setTimeout(hideToast,7000);
+}
+function hideToast(){clearTimeout(toastTimer);$("#toast").hidden=true;lastMove=null;}
+function doMove(k,meal,from,to){
+  const r=movePasto(k,meal,from,to);if(!r)return false;
+  lastMove={k,meal,from,to};
+  touchProfile(k);saveLocal();scheduleSync(600);
+  moveFlash={p:k,m:meal,days:[from,to]};
+  setTimeout(()=>{moveFlash=null;if(currentTab==="pc"&&!drag)renderPC();},1800);
+  renderPC();
+  const name=PROFILES.find(x=>x[0]===k)[1],label=meal==="cena"?"Cena":"Pranzo";
+  showToast(r.swap?`${label} di ${name}: ${dayShort(from)} ⇄ ${dayShort(to)}`:`${label} di ${name} ${meal==="cena"?"spostata":"spostato"} da ${dayShort(from)} a ${dayShort(to)}`,true);
+  return true;
+}
+$("#toast-undo").addEventListener("click",()=>{
+  const l=lastMove;if(!l)return;
+  lastMove=null;
+  if(!movePasto(l.k,l.meal,l.to,l.from))return;
+  touchProfile(l.k);saveLocal();scheduleSync(600);
+  moveFlash={p:l.k,m:l.meal,days:[l.from,l.to]};
+  setTimeout(()=>{moveFlash=null;if(currentTab==="pc"&&!drag)renderPC();},1800);
+  renderPC();showToast("Spostamento annullato",false);
+});
+function dragArm(cell,x,y,kind){
+  dragDisarm();
+  const ci=cellInfo(cell);if(!ci||!ci.n)return;
+  dragWait={cell,x,y,kind,timer:null};
+  if(kind==="touch")dragWait.timer=setTimeout(()=>{const w=dragWait;if(w)dragBegin(w.cell,w.x,w.y);},LONG_MS);
+}
+function dragDisarm(){if(dragWait){clearTimeout(dragWait.timer);dragWait=null;}}
+function dragBegin(cell,x,y){
+  const ci=cellInfo(cell);dragWait=null;if(!ci)return;
+  const g=document.createElement("div");g.className="pc-ghost";g.innerHTML=cell.innerHTML;
+  const w=cell.getBoundingClientRect?cell.getBoundingClientRect().width:0;if(w)g.style.width=w+"px";
+  document.body.appendChild(g);
+  drag={p:ci.p,m:ci.m,d:ci.d,cell,ghost:g,hover:null,x,y,raf:0};
+  const v=$("#pc-view");v.dataset.dragging="1";v.dataset.dragP=ci.p;v.dataset.dragM=ci.m;
+  cell.classList.add("drag-src");
+  dragMove(x,y);
+  try{if(navigator.vibrate)navigator.vibrate(25);}catch(e){}
+  dragLoop();
+}
+function dragMove(x,y){
+  if(!drag)return;
+  drag.x=x;drag.y=y;
+  drag.ghost.style.left=x+"px";drag.ghost.style.top=y+"px";
+  const c=cellAt(x,y),ci=cellInfo(c);
+  const nh=(ci&&ci.p===drag.p&&ci.m===drag.m&&ci.d!==drag.d)?c:null;
+  if(nh!==drag.hover){
+    if(drag.hover)drag.hover.classList.remove("drop-hover");
+    if(nh)nh.classList.add("drop-hover");
+    drag.hover=nh;
+  }
+}
+function dragLoop(){
+  if(!drag||typeof requestAnimationFrame!=="function")return;
+  const h=window.innerHeight||0,edge=90;
+  if(h&&typeof window.scrollBy==="function"){
+    let dy=0;
+    if(drag.y<edge)dy=-Math.ceil((edge-drag.y)/6);
+    else if(drag.y>h-edge)dy=Math.ceil((drag.y-(h-edge))/6);
+    if(dy){window.scrollBy(0,dy);dragMove(drag.x,drag.y);}
+  }
+  drag.raf=requestAnimationFrame(dragLoop);
+}
+function dragEnd(commit){
+  dragDisarm();
+  if(!drag)return;
+  const d=drag;drag=null;
+  if(d.raf&&typeof cancelAnimationFrame==="function")cancelAnimationFrame(d.raf);
+  d.ghost.remove();
+  d.cell.classList.remove("drag-src");
+  if(d.hover)d.hover.classList.remove("drop-hover");
+  const v=$("#pc-view");delete v.dataset.dragging;delete v.dataset.dragP;delete v.dataset.dragM;
+  dragSuppress=Date.now()+500;
+  if(commit&&d.hover)doMove(d.p,d.m,d.d,d.hover.dataset.d);
+}
+const pcv=$("#pc-view");
+pcv.addEventListener("touchstart",e=>{
+  const t=e.touches&&e.touches[0];if(!t||e.touches.length>1)return;
+  const c=e.target.closest?e.target.closest(".pc-cell"):null;if(!c)return;
+  dragArm(c,t.clientX,t.clientY,"touch");
+},{passive:true});
+document.addEventListener("touchmove",e=>{
+  const t=e.touches&&e.touches[0];if(!t)return;
+  if(drag){e.preventDefault();dragMove(t.clientX,t.clientY);return;}
+  if(dragWait&&(Math.abs(t.clientX-dragWait.x)>MOVE_PX||Math.abs(t.clientY-dragWait.y)>MOVE_PX))dragDisarm();
+},{passive:false});
+document.addEventListener("touchend",()=>{dragDisarm();dragEnd(true);});
+document.addEventListener("touchcancel",()=>{dragDisarm();dragEnd(false);});
+pcv.addEventListener("mousedown",e=>{
+  if(e.button!==0)return;
+  const c=e.target.closest?e.target.closest(".pc-cell"):null;if(!c)return;
+  dragArm(c,e.clientX,e.clientY,"mouse");
+});
+document.addEventListener("mousemove",e=>{
+  if(drag){dragMove(e.clientX,e.clientY);return;}
+  if(dragWait&&dragWait.kind==="mouse"&&(Math.abs(e.clientX-dragWait.x)>6||Math.abs(e.clientY-dragWait.y)>6)){const w=dragWait;dragWait=null;dragBegin(w.cell,e.clientX,e.clientY);}
+});
+document.addEventListener("mouseup",()=>{dragDisarm();dragEnd(true);});
+document.addEventListener("keydown",e=>{if(e.key==="Escape")dragEnd(false);});
+pcv.addEventListener("contextmenu",e=>{if(e.target.closest&&e.target.closest(".pc-cell"))e.preventDefault();});
 function uiBusy(){
   const a=document.activeElement;
   const typing=!!(a&&((a.tagName==="INPUT"&&a.type!=="checkbox"&&a.type!=="file")||a.tagName==="TEXTAREA"||a.tagName==="SELECT"));
-  return typing||!$("#detail").hidden||!$("#cloud-dlg").hidden||!$("#cat-dlg").hidden;
+  return typing||!!drag||!$("#detail").hidden||!$("#cloud-dlg").hidden||!$("#cat-dlg").hidden;
 }
 function refreshUI(){
   if(uiBusy()){pendingUI=true;return;}
@@ -1384,7 +1533,7 @@ document.addEventListener("keydown",e=>{
 });
 
 function show(tab){
-  closeDetail();currentTab=tab;if(tab!=="pc")lastTab=tab;
+  closeDetail();dragEnd(false);hideToast();currentTab=tab;if(tab!=="pc")lastTab=tab;
   for(const t of ["plan","rec","shop","recap","pc"]){
     const tb=$("#tab-"+t);if(tb)tb.setAttribute("aria-selected",t===tab);
     $("#view-"+t).hidden=t!==tab;
