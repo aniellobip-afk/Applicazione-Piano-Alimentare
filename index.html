@@ -225,6 +225,15 @@
   .c-line{font-size:14px;color:var(--muted);margin:0 0 10px}
   .c-msg{margin:12px 0 0;font-size:14px;font-weight:600;color:var(--basil-dark)}
   .c-msg.err{color:#9B2C2C}
+  .shop li{display:flex;align-items:stretch}
+  .shop li label{flex:1;min-width:0}
+  .cat-h{display:flex;justify-content:space-between;align-items:baseline;margin:20px 0 6px;font-size:13px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);font-weight:700}
+  .cat-h span:last-child{letter-spacing:0;font-weight:600}
+  .cat-btn{border:0;background:transparent;color:var(--muted);font-size:22px;line-height:1;width:46px;cursor:pointer;flex:none}
+  .cat-btn:hover{background:#F0F3EF}
+  .cat-opt{display:flex;justify-content:space-between;align-items:center;width:100%;text-align:left;border:1.5px solid var(--line);background:#fff;border-radius:10px;padding:11px 12px;font:inherit;color:var(--ink);cursor:pointer;margin-bottom:6px}
+  .cat-opt[aria-pressed="true"]{border-color:var(--basil);background:#EAF3EC;font-weight:700}
+  .cat-row{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--line);font-size:14.5px}
   @media (max-width:380px){
     .row{grid-template-columns:1fr 60px 66px 32px}
   }
@@ -268,6 +277,10 @@
     <label class="opt"><input type="checkbox" id="inc-done"> Includi anche gli articoli già nel carrello</label>
     <p class="progress" id="progress"></p>
     <div id="shop-view"></div>
+    <details class="export" id="cats-box">
+      <summary id="cats-sum">Le mie categorie</summary>
+      <div id="cats-list"></div>
+    </details>
     <details class="export">
       <summary>Mostra il testo da incollare</summary>
       <textarea id="export-text" readonly rows="10" aria-label="Testo della lista della spesa"></textarea>
@@ -280,6 +293,14 @@
       <div class="d-tags" id="d-tags"></div>
       <div class="d-scroll" id="d-body"></div>
       <button class="primary d-close" id="d-close">Chiudi</button>
+    </div>
+  </div>
+
+  <div class="overlay" id="cat-dlg" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="cat-title">
+      <h2 class="d-title" id="cat-title"></h2>
+      <div class="d-scroll" id="cat-body" style="margin-top:12px"></div>
+      <button class="ghost d-close" id="cat-close">Chiudi</button>
     </div>
   </div>
 
@@ -320,6 +341,19 @@ const KEY="piano-pasti-v2", OLD_KEY="piano-pasti-v1";
 const KEY3="piano-pasti-v3", ACTIVE_KEY="piano-pasti-attivo", CLOUD_KEY="piano-pasti-cloud", DEV_KEY="piano-pasti-device";
 const PROFILES=[["nello","Nello"],["emma","Emma"]];
 const SCOPES=["nello","emma","insieme"];
+/* Categorie della lista della spesa. Il dizionario cerca ogni parola all'inizio di una parola del nome dell'ingrediente
+   (così "zucchin" riconosce zucchina, zucchine, zucchini). Vince la parola più lunga. */
+const CATS=[["verdura","Verdura"],["frutta","Frutta"],["carne","Carne"],["pesce","Pesce"],["latticini","Latticini e uova"],["carboidrati","Carboidrati"],["dispensa","Dispensa"],["altro","Altro"]];
+const CAT_IDS=CATS.map(x=>x[0]);
+const CAT_DICT={
+  verdura:["zucchin","melanzan","pomodor","peperon","carot","cipoll","scalogn","aglio","spinac","biet","cavol","broccol","insalat","lattug","rucola","radicchi","finocch","sedano","cetriol","zucca","fung","champignon","porcin","asparag","carciof","pisell","fagiolin","porr","ravanell","rape","rapa","barbabietol","zenzero","basilic","prezzemol","rosmarin","salvia","menta","timo","erba cipollina","verdur","minestron","indivia","cicoria","songino","valerian","cime di rapa","friarielli","topinambur","taccole","edamame","germogli","misticanza","iceberg","lollo","crescione"],
+  frutta:["mela","mele","melone","melograno","melagrana","pera","pere","banan","aranc","mandarin","clementin","limon","lime","pompelm","pomelo","kiwi","fragol","mirtill","lampon","ribes","uva","ciliegi","albicocch","pesca","pesche","nettarin","susin","prugn","fichi","fico","dattero","datteri","anguria","cocomero","ananas","mango","papaya","avocado","cachi","frutti di bosco","frutta","more ","kumquat"],
+  carne:["pollo","tacchin","manzo","vitell","maiale","suino","agnell","coniglio","anatra","salsicc","wurstel","prosciutt","salame","salami","speck","pancetta","guanciale","bresaola","mortadella","bacon","hamburger","bistecc","fettina","macinato","cotolett","arrosto","spezzatin","polpett","fesa","fegato","trippa","costin","carne","affettat","salumi","cotechino","porchetta","lonza","ossobuco","involtin","straccetti","petto di","cosce","coscia","alette","pollame","tartare","bue","cervo","cinghiale","capretto"],
+  pesce:["pesce","salmon","tonno","merluzz","orata","branzin","spigola","sogliol","baccal","stoccafisso","acciug","alici","alice","sardin","sgombr","gamber","scamp","calamar","totan","seppi","polpo","cozze","vongol","molluschi","crostacei","trota","pescespada","pescatrice","platessa","nasello","aragost","astice","granchio","surimi","bastoncin","frutti di mare","cernia","dentice","palombo","mazzancoll","cappesant","ostric","anguilla","aringa","carpa","luccio"],
+  latticini:["latte","yogurt","yoghurt","burro","formagg","mozzarell","parmigian","grana","pecorin","ricott","mascarpon","stracchin","gorgonzol","provol","scamorz","fontina","asiago","emmental","taleggio","feta","philadelphia","panna","uov","tuorl","albume","kefir","latticin","skyr","caciotta","primosale","robiola","burrata","crescenza","fiocchi di latte","besciamella","cheddar","brie","camembert","edam","quark","caprino","halloumi","paneer"],
+  carboidrati:["pasta","spaghett","penne","fusilli","rigaton","maccheron","tagliatell","lasagn","gnocch","tortellin","ravioli","paccheri","bucatini","linguine","farfalle","orecchiett","pappardell","cannelloni","fregola","vermicelli","noodles","udon","soba","riso","orzo","farro","couscous","cous cous","quinoa","avena","bulgur","miglio","amaranto","grano saraceno","cereali","muesli","corn flakes","fiocchi d","pane","panin","pancarr","focaccia","piadin","tortilla","wrap","grissin","cracker","fette biscottate","biscott","farina","semola","polenta","patat","pizza","brioche","cornett","croissant","merendin","pangrattat","pan grattato","crostin","taralli","gallette"],
+  dispensa:["olio","aceto","sale ","pepe","zucchero","miele","marmellat","confettur","crema di nocciol","nutella","cacao","caffe","tisan","camomill","te ","ceci","lenticchi","fagiol","passata","pelati","salsa","sugo","pesto","ketchup","maionese","senape","dado","brodo","spezie","origano","curry","paprika","cannella","noce moscata","lievito","bicarbonato","vanill","frutta secca","noci","mandorl","nocciol","pistacch","arachid","pinoli","semi di","semi ","uvetta","cioccolat","mais ","oliv","capperi","sottaceti","cetriolini","acqua","vino","birra","succo","bevand","latte di mandorla","latte di soia","latte di avena","latte di riso","latte di cocco","tofu","tempeh","seitan","hummus","tahin","burro di arachidi","burro di mandorle","burro di cacao","dolcificante","stevia","sciroppo","zafferano","aromi","chiodi di garofano","gelatina","colla di pesce","amido","maizena","fecola","budino","gelato","snack","sottolio","sott olio","conserva","concentrato di pomodoro","salsa di pomodoro","polpa di pomodoro","passata di pomodoro","sugo di pomodoro","pomodori in scatola","pomodoro pelato","pomodori a pezzetti","pomodori secchi","pomodori pelati","ragu"]
+};
 
 let db=null;                 // tutti i dati locali (due profili + spunte condivise)
 let active="nello";          // profilo in uso su questo dispositivo
@@ -399,7 +433,7 @@ function migrate(old){
   return s;
 }
 function newDb(){
-  const d={profiles:{},shared:{},meta:{}};
+  const d={profiles:{},shared:{},meta:{},cats:{}};
   for(const [k] of PROFILES){d.profiles[k]={recipes:[],plan:{}};d.meta[k]={base:0,dirty:false,t:0,seq:0};}
   for(const sc of SCOPES)d.shared[sc]={};
   return d;
@@ -417,6 +451,8 @@ function normalizeDb(d){
     const src=(d.shared&&d.shared[sc])||{};
     for(const key in src){const e=src[key];if(e&&typeof e.t==="number")n.shared[sc][key]={c:!!e.c,t:e.t};}
   }
+  const sc=(d.cats&&typeof d.cats==="object")?d.cats:{};
+  for(const key in sc){const e=sc[key];if(e&&typeof e.t==="number"&&typeof e.c==="string")n.cats[key]={c:e.c,t:e.t,n:String(e.n||key)};}
   return n;
 }
 function finishLoad(){state=db.profiles[active];shopScope=active;}
@@ -451,6 +487,25 @@ async function saveShared(){await saveLocal();scheduleSync(600);}
 function isChecked(scope,key){const e=db.shared[scope]&&db.shared[scope][key];return !!(e&&e.c);}
 function setChecked(scope,key,val){db.shared[scope][key]={c:!!val,t:Date.now()};}
 function clearChecked(scope){const now=Date.now();const m=db.shared[scope];for(const k in m){if(m[k].c)m[k]={c:false,t:now};}}
+
+/* categorie: dizionario di base + correzioni dell'utente (sincronizzate) */
+function normName(s){return String(s).toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"").replace(/[^a-z0-9]+/g," ").trim();}
+const CAT_TERMS=[];
+for(const [cat,terms] of Object.entries(CAT_DICT))for(const t of terms)CAT_TERMS.push([t,cat]);
+CAT_TERMS.sort((a,b)=>(b[0].length-a[0].length)||((a[1]==="dispensa"?-1:0)-(b[1]==="dispensa"?-1:0)));
+function baseCategory(name){
+  const n=" "+normName(name)+" ";
+  for(const [t,c] of CAT_TERMS)if(n.includes(" "+t))return c;
+  return "altro";
+}
+function categoryOf(name){
+  const o=db.cats[normName(name)];
+  if(o&&o.c&&CAT_IDS.includes(o.c))return o.c;
+  return baseCategory(name);
+}
+function hasOverride(name){const o=db.cats[normName(name)];return !!(o&&o.c&&CAT_IDS.includes(o.c));}
+function setCategory(name,cat){db.cats[normName(name)]={c:cat||"",t:Date.now(),n:String(name).trim()};}
+const catLabel=id=>(CATS.find(x=>x[0]===id)||[,id])[1];
 
 /* ---------- Cloud (Firebase Realtime Database, tramite REST) ---------- */
 let cloud=null;                       // {u: indirizzo, c: codice, k: chiave}
@@ -536,6 +591,19 @@ function mergeFirst(k,r){
   if(k===active)state=db.profiles[k];
   return true;
 }
+function mergeEntries(loc,rem){
+  let changed=false;const patch={};
+  for(const ek in rem){
+    const re=rem[ek];if(!re||typeof re.t!=="number")continue;
+    const key=decKey(ek),le=loc[key];
+    if(!le||le.t<re.t){const cp={c:re.c,t:re.t};if(re.n!==undefined)cp.n=re.n;loc[key]=cp;changed=true;}
+  }
+  for(const key in loc){
+    const ek=encKey(key),re=rem[ek];
+    if(!re||re.t<loc[key].t){const cp={c:loc[key].c,t:loc[key].t};if(loc[key].n!==undefined)cp.n=loc[key].n;patch[ek]=cp;}
+  }
+  return {changed,patch};
+}
 async function syncNow(){
   if(!cloud)return;
   if(syncing){syncAgain=true;return;}
@@ -562,17 +630,14 @@ async function syncNow(){
     }
     const rs=remote.shared||{};
     for(const sc of SCOPES){
-      const rem=rs[sc]||{},loc=db.shared[sc],patch={};
-      for(const ek in rem){
-        const re=rem[ek];if(!re||typeof re.t!=="number")continue;
-        const key=decKey(ek),le=loc[key];
-        if(!le||le.t<re.t){loc[key]={c:!!re.c,t:re.t};changed=true;}
-      }
-      for(const key in loc){
-        const ek=encKey(key),re=rem[ek];
-        if(!re||re.t<loc[key].t)patch[ek]={c:loc[key].c,t:loc[key].t};
-      }
-      if(Object.keys(patch).length)await rt("PATCH","/shared/"+sc,patch);
+      const mg=mergeEntries(db.shared[sc],rs[sc]||{});
+      if(mg.changed)changed=true;
+      if(Object.keys(mg.patch).length)await rt("PATCH","/shared/"+sc,mg.patch);
+    }
+    {
+      const mg=mergeEntries(db.cats,remote.cats||{});
+      if(mg.changed)changed=true;
+      if(Object.keys(mg.patch).length)await rt("PATCH","/cats",mg.patch);
     }
     lastSync=Date.now();
     await saveLocal();
@@ -708,7 +773,7 @@ $("#profiles").addEventListener("click",e=>{const b=e.target.closest("[data-p]")
 function uiBusy(){
   const a=document.activeElement;
   const typing=!!(a&&((a.tagName==="INPUT"&&a.type!=="checkbox"&&a.type!=="file")||a.tagName==="TEXTAREA"||a.tagName==="SELECT"));
-  return typing||!$("#detail").hidden||!$("#cloud-dlg").hidden;
+  return typing||!$("#detail").hidden||!$("#cloud-dlg").hidden||!$("#cat-dlg").hidden;
 }
 function refreshUI(){
   if(uiBusy()){pendingUI=true;return;}
@@ -1050,10 +1115,32 @@ $("#shop-scope").addEventListener("click",e=>{
 });
 function exportText(){
   const inc=$("#inc-done").checked;
-  return buildShopping()
-    .filter(i=>inc||!isChecked(shopScope,i.key))
-    .map(i=>"• "+i.name+(i.total?" – "+fmtTotal(i.fam,i.total):""))
-    .join("\n");
+  const items=buildShopping().filter(i=>inc||!isChecked(shopScope,i.key));
+  const out=[];
+  for(const [cid,label] of CATS){
+    const g=items.filter(i=>categoryOf(i.name)===cid);
+    if(!g.length)continue;
+    out.push(label.toUpperCase());
+    for(const i of g)out.push("• "+i.name+(i.total?" – "+fmtTotal(i.fam,i.total):""));
+    out.push("");
+  }
+  return out.join("\n").trim();
+}
+function itemRow(i){
+  const done=isChecked(shopScope,i.key);
+  const uses=[...i.uses].map(([n,c])=>n+(c>1?` ×${c}`:"")).join(", ");
+  return `<li class="${done?"done":""}"><label>
+      <input type="checkbox" data-key="${esc(i.key)}" ${done?"checked":""}>
+      <span class="item-main"><span><span class="item-name">${esc(i.name)}</span><span class="item-uses">${esc(uses)}</span></span>
+      <span class="item-qty">${fmtTotal(i.fam,i.total)}</span></span>
+    </label><button class="cat-btn" data-name="${esc(i.name)}" aria-label="Cambia categoria di ${esc(i.name)}">⋮</button></li>`;
+}
+function renderCatsList(){
+  const list=Object.entries(db.cats).filter(([k,e])=>e.c&&CAT_IDS.includes(e.c)).map(([k,e])=>({k,n:e.n||k,c:e.c})).sort((a,b)=>a.n.localeCompare(b.n,"it"));
+  $("#cats-sum").textContent=list.length?`Le mie categorie (${list.length})`:"Le mie categorie";
+  $("#cats-list").innerHTML=list.length
+    ?list.map(x=>`<div class="cat-row"><span><b>${esc(x.n)}</b> → ${esc(catLabel(x.c))}</span><button class="ghost cat-reset" data-k="${esc(x.k)}">Ripristina</button></div>`).join("")
+    :`<p class="empty">Nessuna correzione: tutti gli articoli usano la categoria automatica.</p>`;
 }
 function renderShop(){
   renderScope();
@@ -1061,19 +1148,53 @@ function renderShop(){
   $("#export-text").value=exportText();
   const done=items.filter(i=>isChecked(shopScope,i.key)).length;
   $("#progress").textContent=items.length?`${done} di ${items.length} nel carrello`:"";
+  renderCatsList();
   if(!items.length){
     $("#shop-view").innerHTML=`<p class="state">La lista è vuota. Assegna delle ricette ai pasti nel Piano e gli ingredienti compariranno qui.</p>`;
     return;
   }
-  const ordered=[...items.filter(i=>!isChecked(shopScope,i.key)),...items.filter(i=>isChecked(shopScope,i.key))];
-  $("#shop-view").innerHTML=`<ul class="shop">`+ordered.map(i=>{
-    const uses=[...i.uses].map(([n,c])=>n+(c>1?` ×${c}`:"")).join(", ");
-    return `<li class="${isChecked(shopScope,i.key)?"done":""}"><label>
-      <input type="checkbox" data-key="${esc(i.key)}" ${isChecked(shopScope,i.key)?"checked":""}>
-      <span class="item-main"><span><span class="item-name">${esc(i.name)}</span><span class="item-uses">${esc(uses)}</span></span>
-      <span class="item-qty">${fmtTotal(i.fam,i.total)}</span></span>
-    </label></li>`;}).join("")+`</ul>`;
+  let html="";
+  for(const [cid,label] of CATS){
+    const g=items.filter(i=>categoryOf(i.name)===cid);
+    if(!g.length)continue;
+    const open=g.filter(i=>!isChecked(shopScope,i.key)),taken=g.filter(i=>isChecked(shopScope,i.key));
+    html+=`<h3 class="cat-h"><span>${label}</span><span>${open.length}</span></h3><ul class="shop">${[...open,...taken].map(itemRow).join("")}</ul>`;
+  }
+  $("#shop-view").innerHTML=html;
 }
+/* cambio categoria di un articolo */
+let catName=null;
+function openCat(name){
+  catName=name;
+  $("#cat-title").textContent=name;
+  const cur=categoryOf(name),ov=hasOverride(name);
+  $("#cat-body").innerHTML=CATS.map(([id,l])=>`<button class="cat-opt" data-c="${id}" aria-pressed="${id===cur}"><span>${l}</span>${id===cur?"<span>✓</span>":""}</button>`).join("")
+    +(ov?`<button class="ghost cat-auto" style="width:100%;margin-top:4px">Torna all'automatica (${catLabel(baseCategory(name))})</button>`:"");
+  $("#cat-dlg").hidden=false;document.body.style.overflow="hidden";
+}
+function closeCat(){
+  $("#cat-dlg").hidden=true;document.body.style.overflow="";catName=null;
+  if(pendingUI)refreshUI();
+}
+$("#shop-view").addEventListener("click",e=>{
+  const b=e.target.closest(".cat-btn");if(b)openCat(b.dataset.name);
+});
+$("#cat-body").addEventListener("click",e=>{
+  const o=e.target.closest(".cat-opt"),a=e.target.closest(".cat-auto");
+  if(!catName||(!o&&!a))return;
+  const name=catName;
+  setCategory(name,o&&o.dataset.c!==baseCategory(name)?o.dataset.c:"");
+  closeCat();renderShop();saveShared();
+});
+$("#cat-close").addEventListener("click",closeCat);
+$("#cat-dlg").addEventListener("click",e=>{if(e.target===$("#cat-dlg"))closeCat();});
+document.addEventListener("keydown",e=>{if(e.key==="Escape"&&!$("#cat-dlg").hidden)closeCat();});
+$("#cats-list").addEventListener("click",e=>{
+  const b=e.target.closest(".cat-reset");if(!b)return;
+  const o=db.cats[b.dataset.k];if(!o)return;
+  db.cats[b.dataset.k]={c:"",t:Date.now(),n:o.n};
+  renderShop();saveShared();
+});
 $("#shop-view").addEventListener("change",e=>{
   const k=e.target.dataset.key;if(k===undefined)return;
   setChecked(shopScope,k,e.target.checked);
