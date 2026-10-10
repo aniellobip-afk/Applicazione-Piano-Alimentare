@@ -254,6 +254,7 @@
   .pc-r{display:block;width:100%;text-align:left;border:0;background:transparent;padding:2px 0;font:inherit;font-size:14.5px;line-height:1.3;color:var(--ink);cursor:pointer;text-decoration:underline;text-decoration-color:var(--line);text-underline-offset:3px}
   .pc-r:hover{text-decoration-color:var(--basil)}
   .pc-none{color:var(--muted);font-size:14.5px;margin:2px 0}
+  .pc-r .carb-dot-inline{margin-left:7px;vertical-align:1px}
   .rc-sec{background:var(--card);border:1px solid var(--line);border-left:6px solid var(--basil);border-radius:var(--radius);padding:12px 14px;margin-bottom:12px}
   .rc-sec.s{border-left-color:var(--lemon)}
   .rc-sec h3{margin:0 0 6px;font-size:17px}
@@ -840,22 +841,27 @@ function pcRecipes(p,day,meal){
   const dp=db.profiles[p];
   return ((dp.plan[day]||{})[meal]||[]).map(e=>dp.recipes.find(x=>x.id===e.recipeId)).filter(Boolean);
 }
-function recipeBtn(r,p){return `<button class="pc-r" data-rid="${esc(r.id)}" data-p="${p}">${esc(rname(r))}</button>`;}
+function recipeBtn(r,p,carb){
+  const c=carb&&r.carb;
+  return `<button class="pc-r" data-rid="${esc(r.id)}" data-p="${p}"${c?` aria-label="${esc(rname(r))}, contiene carboidrato"`:""}>${esc(rname(r))}${c?`<span class="carb-dot-inline" title="Contiene carboidrato"></span>`:""}</button>`;
+}
 function renderPC(){
-  let h=`<div class="pc-head"><h2>Planner P&amp;C</h2><p>Pranzi e cene · Nello ed Emma · sola lettura</p></div>`;
+  let anyCarb=false,body="";
   for(const [dk,full] of DAYS){
-    h+=`<div class="pc-day"><h3>${full}</h3>`;
+    body+=`<div class="pc-day"><h3>${full}</h3>`;
     for(const [mk,label] of [["pranzo","Pranzo"],["cena","Cena"]]){
-      h+=`<div class="pc-meal"><p class="pc-ml">${label}</p><div class="pc-two">`;
+      body+=`<div class="pc-meal"><p class="pc-ml">${label}</p><div class="pc-two">`;
       for(const [k,pn] of PROFILES){
         const rs=pcRecipes(k,dk,mk);
-        h+=`<div><span class="pc-who ${k==="nello"?"n":"e"}">${pn}</span>${rs.length?rs.map(r=>recipeBtn(r,k)).join(""):`<p class="pc-none">—</p>`}</div>`;
+        if(rs.some(r=>r.carb))anyCarb=true;
+        body+=`<div><span class="pc-who ${k==="nello"?"n":"e"}">${pn}</span>${rs.length?rs.map(r=>recipeBtn(r,k,true)).join(""):`<p class="pc-none">—</p>`}</div>`;
       }
-      h+=`</div></div>`;
+      body+=`</div></div>`;
     }
-    h+=`</div>`;
+    body+=`</div>`;
   }
-  $("#pc-view").innerHTML=h;
+  $("#pc-view").innerHTML=`<div class="pc-head"><h2>Planner P&amp;C</h2><p>Pranzi e cene · Nello ed Emma · sola lettura</p></div>`
+    +(anyCarb?`<p class="carb-legend"><span class="carb-dot-inline"></span> Contiene carboidrato</p>`:"")+body;
 }
 function renderRecap(){
   const pn=PROFILES.find(x=>x[0]===active)[1];
